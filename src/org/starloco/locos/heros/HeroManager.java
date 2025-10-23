@@ -66,6 +66,9 @@ public final class HeroManager {
             return HeroOperationResult.error("Ce personnage est déjà actif comme héros.");
         }
         Map<Integer, HeroInstance> currentHeroes = heroesByMaster.computeIfAbsent(master.getId(), id -> new HashMap<>());
+        if (currentHeroes.containsKey(original.getId())) {
+            return HeroOperationResult.error("Ce personnage est déjà actif comme héros.");
+        }
         if (currentHeroes.size() >= MAX_HEROES) {
             return HeroOperationResult.error("Nombre maximum de héros atteint.");
         }
@@ -86,7 +89,10 @@ public final class HeroManager {
         clone.setCurCell(targetCell);
         map.addPlayer(clone);
 
-        addHeroToParty(master, clone);
+        if (!addHeroToParty(master, clone)) {
+            dismissClone(master, clone);
+            return HeroOperationResult.error("Impossible d'intégrer le héros au groupe.");
+        }
 
         currentHeroes.put(original.getId(), new HeroInstance(original, clone));
         heroOwners.put(original.getId(), master.getId());
@@ -212,7 +218,7 @@ public final class HeroManager {
         return baseCell;
     }
 
-    private void addHeroToParty(Player master, Player clone) {
+    private boolean addHeroToParty(Player master, Player clone) {
         Party party = master.getParty();
         if (party == null) {
             party = new Party(master, clone);
@@ -225,11 +231,14 @@ public final class HeroManager {
                 SocketManager.GAME_SEND_ALL_PM_ADD_PACKET(master.getGameClient(), party);
             }
             SocketManager.GAME_SEND_PR_PACKET(master);
-            return;
+            return true;
         }
-        party.addPlayer(clone);
+        if (!party.addPlayer(clone)) {
+            return false;
+        }
         clone.setParty(party);
         SocketManager.GAME_SEND_PM_ADD_PACKET_TO_GROUP(party, clone);
+        return true;
     }
 
     private void dismissClone(Player master, Player clone) {

@@ -1,5 +1,7 @@
 package org.starloco.locos.client.other;
 
+import ch.qos.logback.classic.Logger;
+import org.slf4j.LoggerFactory;
 import org.starloco.locos.area.map.GameCase;
 import org.starloco.locos.area.map.GameMap;
 import org.starloco.locos.client.Player;
@@ -8,21 +10,33 @@ import org.starloco.locos.common.SocketManager;
 
 import java.util.ArrayList;
 
+/**
+ * Gère un groupe de joueurs en conservant l'ordre de recrutement.
+ */
 public class Party {
+
+    private static final Logger LOGGER = (Logger) LoggerFactory.getLogger(Party.class);
 
     public final Player chief;
     public final ArrayList<Player> players = new ArrayList<>();
-	public Player master;
+    public Player master;
 
+    /**
+     * Crée un groupe avec un chef obligatoire et un second membre éventuel.
+     *
+     * @param p1 chef du groupe.
+     * @param p2 membre à ajouter immédiatement, peut être {@code null}.
+     */
     public Party(Player p1, Player p2) {
         this.chief = p1;
-        this.players.add(p1);
-        if (p2 != null && !this.players.contains(p2)) {
-            this.players.add(p2);
-        }
+        registerPlayer(p1);
+        registerPlayer(p2);
     }
 
 
+    /**
+     * @return joueurs enregistrés dans le groupe.
+     */
     public ArrayList<Player> getPlayers() {
         return this.players;
     }
@@ -43,8 +57,14 @@ public class Party {
         this.master = master;
     }
 
-    public void addPlayer(Player player) {
-        this.players.add(player);
+    /**
+     * Ajoute un joueur si son identifiant n'est pas déjà présent.
+     *
+     * @param player membre potentiel.
+     * @return {@code true} si l'ajout a été effectué.
+     */
+    public boolean addPlayer(Player player) {
+        return registerPlayer(player);
     }
 
     public void leave(Player player) {
@@ -101,10 +121,10 @@ public class Party {
     }
     
     public void teleportAllEsclaves()
-	{
-    	for (Player follower : players)
-		{
-		if(follower.getExchangeAction() != null)
+        {
+        for (Player follower : players)
+                {
+                if(follower.getExchangeAction() != null)
 		{
             follower.sendMessage("Vous n'avez pas pu être téléporté car vous êtes occupé.");
             master.sendMessage("Le joueur "+follower.getName()+" est occupé et n'a pas pu être téléporté.");
@@ -113,7 +133,23 @@ public class Party {
 		if(master.getCurMap().getId() != follower.getCurMap().getId() && GameMap.IsInDj(master.getCurMap()))
 			follower.teleport(master.getCurMap().getId(), master.getCurCell().getId());
 		}
-		
-	}
-    
+
+        }
+
+    private boolean registerPlayer(Player player) {
+        if (player == null) {
+            return false;
+        }
+        boolean alreadyPresent = this.players.stream().anyMatch(member -> member.getId() == player.getId());
+        if (alreadyPresent) {
+            LOGGER.debug("Ignoré: joueur {} ({}) déjà présent dans le groupe du chef {}.",
+                    player.getName(), player.getId(), this.chief != null ? this.chief.getId() : -1);
+            return false;
+        }
+        this.players.add(player);
+        LOGGER.info("Ajout du joueur {} ({}) dans le groupe du chef {}.",
+                player.getName(), player.getId(), this.chief != null ? this.chief.getId() : -1);
+        return true;
+    }
+
 }
