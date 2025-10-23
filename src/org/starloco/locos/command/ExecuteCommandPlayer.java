@@ -216,7 +216,7 @@ public class ExecuteCommandPlayer {
                     removePoint = doKralaClose(msg, player);
                     break;
                 case 35:
-                    removePoint = doHeros(msg, player);
+                    //removePoint = doHeros(msg, player);
                     break;
             }
 
@@ -1262,16 +1262,16 @@ public class ExecuteCommandPlayer {
 
     }
 
-    private static boolean doHeros(final String msg, final Player player) {
-        if (msg == null || msg.equals("")) return false;
-
-        // Exemple : ajout de ta commande .heros
-        if (msg.length() > 5 && msg.substring(1, 6).equalsIgnoreCase("heros")) {
-            return org.starloco.locos.heros.HeroCommandHandler.handleCommand(player, msg);
-        }
-
-        return false;
-    }
+//    private static boolean doHeros(final String msg, final Player player) {
+//        if (msg == null || msg.equals("")) return false;
+//
+//        // Exemple : ajout de ta commande .heros
+//        if (msg.length() > 5 && msg.substring(1, 6).equalsIgnoreCase("heros")) {
+//            return org.starloco.locos.heros.HeroCommandHandler.handleCommand(player, msg);
+//        }
+//
+//        return false;
+//    }
 
     private static boolean doCommand(final Player player)
     {
