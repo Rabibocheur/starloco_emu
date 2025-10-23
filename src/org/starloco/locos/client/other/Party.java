@@ -17,8 +17,11 @@ public class Party {
     public Party(Player p1, Player p2) {
         this.chief = p1;
         this.players.add(p1);
-        this.players.add(p2);
+        if (p2 != null && !this.players.contains(p2)) {
+            this.players.add(p2);
+        }
     }
+
 
     public ArrayList<Player> getPlayers() {
         return this.players;
@@ -58,12 +61,17 @@ public class Party {
         }
 
         if (this.players.size() == 1) {
-            this.players.get(0).setParty(null);
-            if (this.players.get(0).getAccount() == null || this.players.get(0).getGameClient() == null)
-                return;
-            SocketManager.GAME_SEND_PV_PACKET(this.players.get(0).getGameClient(), "");
+            Player remaining = this.players.get(0);
+            remaining.setParty(null);
+            if (remaining.getAccount() != null && remaining.getAccount().getGameClient() != null) {
+                SocketManager.GAME_SEND_PV_PACKET(remaining.getGameClient(), "");
+            }
         } else {
-            SocketManager.GAME_SEND_PM_DEL_PACKET_TO_GROUP(this, player.getId());
+            for (Player member : this.players) {
+                if (member.getAccount() != null && member.getAccount().getGameClient() != null) {
+                    SocketManager.GAME_SEND_PM_DEL_PACKET_TO_GROUP(this, player.getId());
+                }
+            }
         }
     }
     

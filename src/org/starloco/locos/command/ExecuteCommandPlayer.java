@@ -80,10 +80,6 @@ public class ExecuteCommandPlayer {
 
     public static boolean analyse(Player player, String msg) {
         if (msg.charAt(0) == '.' && msg.length() > 1 && msg.charAt(1) != '.') {
-            String trimmed = msg;
-            if (trimmed.endsWith("\u0000")) {
-                trimmed = trimmed.substring(0, trimmed.length() - 1);
-            }
             final String commandName = msg.substring(0, msg.length() - 1).trim().split(" ")[0].substring(1);
 
             final PlayerCommand playerCommand = World.world.getPlayerCommandByName(commandName);
@@ -220,7 +216,7 @@ public class ExecuteCommandPlayer {
                     removePoint = doKralaClose(msg, player);
                     break;
                 case 35:
-                    removePoint = doHeros(trimmed, player);
+                    removePoint = doHeros(msg, player);
                     break;
             }
 
@@ -286,10 +282,11 @@ public class ExecuteCommandPlayer {
     }
 
     private static boolean doHeros(String message, Player player) {
-        if (!message.regionMatches(true, 0, ".heros", 0, 6)) {
+        final String arguments = message.substring(0, message.length() - 1).trim();
+        if (!arguments.regionMatches(true, 0, ".heros", 0, 6)) {
             return false;
         }
-        HeroCommandHandler.handleCommand(player, message);
+        HeroCommandHandler.handleCommand(player, arguments);
         return false;
     }
 

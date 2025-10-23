@@ -179,6 +179,9 @@ public final class HeroManager {
             clone.toogleOnMount();
             clone.getMount().setEnergy(savedEnergy);
         }
+
+        clone.setAccount(master.getAccount());
+
         return clone;
     }
 
