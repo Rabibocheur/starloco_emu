@@ -6,6 +6,7 @@ import org.starloco.locos.database.Database;
 import org.starloco.locos.game.GameClient;
 import org.starloco.locos.game.world.World;
 import org.starloco.locos.hdv.HdvEntry;
+import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.kernel.Main;
 import org.starloco.locos.object.GameObject;
 
@@ -541,6 +542,8 @@ public class Account {
         Database.getStatics().getAccountData().setLogged(this.getId(), 0);
         Database.getStatics().getPlayerData().updateAllLogged(this.getId(), 0);
         Database.getStatics().getPlayerData().update(player);
+
+        HeroManager.getInstance().removeAllHeroes(player);
 
         if (player.getExchangeAction() != null)
             GameClient.leaveExchange(player);
