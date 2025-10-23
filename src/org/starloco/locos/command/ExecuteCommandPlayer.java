@@ -19,6 +19,7 @@ import org.starloco.locos.kernel.Main;
 import org.starloco.locos.util.lang.Lang;
 
 import org.starloco.locos.fight.spells.*;
+import org.starloco.locos.heros.HeroCommandHandler;
 import org.starloco.locos.object.GameObject;
 import org.starloco.locos.object.ObjectTemplate;
 
@@ -78,8 +79,11 @@ public class ExecuteCommandPlayer {
     };
 
     public static boolean analyse(Player player, String msg) {
-        if (msg.charAt(0) == '.' && msg.charAt(1) != '.') {
-
+        if (msg.charAt(0) == '.' && msg.length() > 1 && msg.charAt(1) != '.') {
+            String trimmed = msg;
+            if (trimmed.endsWith("\u0000")) {
+                trimmed = trimmed.substring(0, trimmed.length() - 1);
+            }
             final String commandName = msg.substring(0, msg.length() - 1).trim().split(" ")[0].substring(1);
 
             final PlayerCommand playerCommand = World.world.getPlayerCommandByName(commandName);
@@ -216,7 +220,7 @@ public class ExecuteCommandPlayer {
                     removePoint = doKralaClose(msg, player);
                     break;
                 case 35:
-                    //removePoint = doHeros(msg, player);
+                    removePoint = doHeros(trimmed, player);
                     break;
             }
 
@@ -278,6 +282,14 @@ public class ExecuteCommandPlayer {
             return true;
         }
         SocketManager.GAME_SEND_Im_PACKET(player, "116;<i>Serveur: </i>~Vous êtes déjà parchotté dans tous les éléments !");
+        return false;
+    }
+
+    private static boolean doHeros(String message, Player player) {
+        if (!message.regionMatches(true, 0, ".heros", 0, 6)) {
+            return false;
+        }
+        HeroCommandHandler.handleCommand(player, message);
         return false;
     }
 
@@ -1261,17 +1273,6 @@ public class ExecuteCommandPlayer {
         return true;
 
     }
-
-//    private static boolean doHeros(final String msg, final Player player) {
-//        if (msg == null || msg.equals("")) return false;
-//
-//        // Exemple : ajout de ta commande .heros
-//        if (msg.length() > 5 && msg.substring(1, 6).equalsIgnoreCase("heros")) {
-//            return org.starloco.locos.heros.HeroCommandHandler.handleCommand(player, msg);
-//        }
-//
-//        return false;
-//    }
 
     private static boolean doCommand(final Player player)
     {
