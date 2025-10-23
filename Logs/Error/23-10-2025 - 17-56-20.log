@@ -1,0 +1,24 @@
+Exception in thread "main" java.lang.ExceptionInInitializerError
+	at com.zaxxer.hikari.HikariConfig.<clinit>(HikariConfig.java:83)
+	at org.starloco.locos.database.statics.StaticsDatabase.initializeConnection(StaticsDatabase.java:56)
+	at org.starloco.locos.database.Database.launchDatabase(Database.java:15)
+	at org.starloco.locos.kernel.Main.start(Main.java:91)
+	at org.starloco.locos.kernel.Main.main(Main.java:78)
+Caused by: java.lang.RuntimeException: java.lang.RuntimeException: java.lang.reflect.InaccessibleObjectException: Unable to make protected final java.lang.Class java.lang.ClassLoader.defineClass(java.lang.String,byte[],int,int) throws java.lang.ClassFormatError accessible: module java.base does not "opens java.lang" to unnamed module @5f282abb
+	at com.zaxxer.hikari.proxy.JavassistProxyFactory.<clinit>(JavassistProxyFactory.java:63)
+	... 5 more
+Caused by: java.lang.RuntimeException: java.lang.reflect.InaccessibleObjectException: Unable to make protected final java.lang.Class java.lang.ClassLoader.defineClass(java.lang.String,byte[],int,int) throws java.lang.ClassFormatError accessible: module java.base does not "opens java.lang" to unnamed module @5f282abb
+	at com.zaxxer.hikari.proxy.JavassistProxyFactory.<init>(JavassistProxyFactory.java:103)
+	at com.zaxxer.hikari.proxy.JavassistProxyFactory.<clinit>(JavassistProxyFactory.java:57)
+	... 5 more
+Caused by: java.lang.reflect.InaccessibleObjectException: Unable to make protected final java.lang.Class java.lang.ClassLoader.defineClass(java.lang.String,byte[],int,int) throws java.lang.ClassFormatError accessible: module java.base does not "opens java.lang" to unnamed module @5f282abb
+	at java.base/java.lang.reflect.AccessibleObject.checkCanSetAccessible(AccessibleObject.java:354)
+	at java.base/java.lang.reflect.AccessibleObject.checkCanSetAccessible(AccessibleObject.java:297)
+	at java.base/java.lang.reflect.Method.checkCanSetAccessible(Method.java:199)
+	at java.base/java.lang.reflect.Method.setAccessible(Method.java:193)
+	at javassist.ClassPool.toClass2(ClassPool.java:1181)
+	at javassist.ClassPool.toClass(ClassPool.java:1164)
+	at javassist.CtClass.toClass(CtClass.java:1305)
+	at com.zaxxer.hikari.proxy.JavassistProxyFactory.generateProxyClass(JavassistProxyFactory.java:213)
+	at com.zaxxer.hikari.proxy.JavassistProxyFactory.<init>(JavassistProxyFactory.java:90)
+	... 6 more
