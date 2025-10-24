@@ -31,6 +31,7 @@ public final class HeroCommandHandler {
         HeroManager manager = HeroManager.getInstance();
         switch (action) {
             case "add":
+                // Alias historique : "connect" déclenche exactement la même logique que "add".
             case "connect":
                 if (parts.length < 3) {
                     master.sendErrorMessage("Format attendu : .heros " + action + " [idPerso]");
