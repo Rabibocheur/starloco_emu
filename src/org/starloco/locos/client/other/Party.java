@@ -88,8 +88,9 @@ public class Party {
     }
     
     public boolean isWithTheMaster(Player follower, boolean inFight) {
-        return follower != null && !follower.getName().equals(this.master.getName()) &&  this.players.contains(follower) && follower.getGameClient()
-                != null && this.master.getCurMap().getId() == follower.getCurMap().getId() && (inFight ? follower.getFight() == this.master.getFight() : follower.getFight() == null);
+        return follower != null && !follower.isEsclave() && !follower.getName().equals(this.master.getName()) && this.players.contains(follower)
+                && follower.getGameClient() != null && this.master.getCurMap().getId() == follower.getCurMap().getId()
+                && (inFight ? follower.getFight() == this.master.getFight() : follower.getFight() == null);
     }
     
     public void teleportAllEsclaves()

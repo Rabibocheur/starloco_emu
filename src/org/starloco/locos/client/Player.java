@@ -1307,11 +1307,18 @@ public class Player {
 
     /**
      * Définit la position logique d'un personnage sans provoquer d'inscription sur la carte.
+     * Nettoie les références de cellule précédentes et annule toute action en cours.
      *
      * @param map  carte de référence, {@code null} si aucune.
      * @param cell cellule de référence, {@code null} si inconnue.
      */
     public void setVirtualPosition(GameMap map, GameCase cell) {
+        if (this.curCell != null) {
+            this.curCell.removePlayer(this);
+        }
+        if (this._gameAction != null) {
+            this._gameAction = null;
+        }
         this.curMap = map;
         this.curCell = cell;
     }
