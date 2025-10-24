@@ -541,33 +541,60 @@ public class Account {
         player.setChangeName(false); // By Coding Mestre - [FIX] Name changing potion is now working as expected Close #38
         Database.getStatics().getAccountData().setLogged(this.getId(), 0);
         Database.getStatics().getPlayerData().updateAllLogged(this.getId(), 0);
-        Database.getStatics().getPlayerData().update(player);
 
-        HeroManager.getInstance().removeAllForMaster(player);
+        HeroManager.getInstance().removeAllForMaster(player); // Bloc logique : libère tous les héros avant toute persistance.
 
-        if (player.getExchangeAction() != null)
+        if (player.getExchangeAction() != null) // Bloc logique : coupe les échanges pour stabiliser les références.
             GameClient.leaveExchange(player);
-        if (player.getParty() != null)
+        if (player.getParty() != null) // Bloc logique : évite les références croisées de groupe lors de la sauvegarde.
             player.getParty().leave(player);
-        if (player.getMount() != null)
+        if (player.getMount() != null) // Bloc logique : enregistre la monture avant la déconnexion effective.
             Database.getDynamics().getMountData().update(player.getMount());
-        if (player.getFight() != null) {
-            if (player.getFight().playerDisconnect(player, false)) {
-                Database.getStatics().getPlayerData().update(player);
+        if (player.getFight() != null) { // Bloc logique : laisse le combat gérer la sortie si nécessaire.
+            if (player.getFight().playerDisconnect(player, false)) { // Bloc logique : la méthode retourne true si la déconnexion combat suffit.
+                persistCharactersWithMasterLast(player); // Bloc logique : garantit que le maître est sauvegardé en dernier.
                 return;
             }
         }
-        this.currentPlayer = null;
-        this.gameClient = null;
-        this.currentIp = "";
+        this.currentPlayer = null; // Bloc logique : efface la référence au joueur actif.
+        this.gameClient = null; // Bloc logique : ferme le client de jeu lié.
+        this.currentIp = ""; // Bloc logique : purge l'adresse IP active.
 
-        for (Player character : this.getPlayers().values())
-            Database.getStatics().getPlayerData().update(character);
+        persistCharactersWithMasterLast(player); // Bloc logique : enregistre tous les personnages en veillant à finir par le maître.
 
-        player.resetVars();
-        this.resetAllChars();
-        Database.getStatics().getAccountData().update(this);
+        player.resetVars(); // Bloc logique : nettoie les variables temporaires du personnage.
+        this.resetAllChars(); // Bloc logique : remet tous les personnages du compte dans un état neutre.
+        Database.getStatics().getAccountData().update(this); // Bloc logique : persiste l'état global du compte.
         World.world.logger.info("The player " + player.getName() + " come to disconnect.");
+    }
+
+    /**
+     * Persiste l'ensemble des personnages du compte en garantissant que le maître est traité en dernier.
+     * <p>
+     * Exemple : {@code persistCharactersWithMasterLast(currentPlayer)} lors d'une déconnexion classique.<br>
+     * Erreur fréquente : appeler cette méthode avec un maître {@code null}, ce qui sauvegarde uniquement les autres personnages.<br>
+     * Invariant : chaque personnage est sauvegardé au plus une fois par appel.<br>
+     * Effet de bord : déclenche {@link Database#getStatics()} pour chaque personnage enregistré.
+     * </p>
+     *
+     * @param master personnage dont la sauvegarde doit clôturer l'opération (peut être {@code null}).
+     */
+    private void persistCharactersWithMasterLast(Player master) {
+        if (this.getPlayers() == null) { // Bloc logique : évite les NullPointerException sur un compte incomplet.
+            return;
+        }
+        for (Player character : this.getPlayers().values()) { // Bloc logique : parcourt tous les personnages du compte.
+            if (character == null) { // Bloc logique : ignore les entrées vacantes éventuelles.
+                continue;
+            }
+            if (character == master) { // Bloc logique : diffère la sauvegarde du maître.
+                continue;
+            }
+            Database.getStatics().getPlayerData().update(character); // Bloc logique : persiste les héros et personnages secondaires.
+        }
+        if (master != null) { // Bloc logique : sauvegarde finale du maître une fois les dépendances stabilisées.
+            Database.getStatics().getPlayerData().update(master);
+        }
     }
 
     public void updateVote(String hour, String ip) {

@@ -47,38 +47,43 @@ public final class HeroManager {
      * @return résultat de l'opération.
      */
     public synchronized HeroOperationResult addHero(Player master, int heroId) {
-        if (master == null) {
-            return HeroOperationResult.error("Maître introuvable.");
+        MasterPositionSnapshot masterSnapshot = MasterPositionSnapshot.capture(master); // Bloc logique : fige la carte du maître pendant l'opération.
+        try {
+            if (master == null) { // Bloc logique : sans maître valide, l'ajout est impossible.
+                return HeroOperationResult.error("Maître introuvable.");
+            }
+            Player hero = master.getAccount().getPlayers().get(heroId); // Bloc logique : récupère le candidat héros sur le compte.
+            if (hero == null) { // Bloc logique : l'identifiant ne correspond à aucun personnage du compte.
+                return HeroOperationResult.error("Aucun personnage avec cet identifiant sur le compte.");
+            }
+            if (hero.getId() == master.getId()) { // Bloc logique : le maître ne peut pas être son propre héros.
+                return HeroOperationResult.error("Le maître ne peut pas être ajouté comme héros.");
+            }
+            if (hero.isOnline()) { // Bloc logique : refuse d'accrocher un personnage déjà connecté.
+                return HeroOperationResult.error("Ce personnage est déjà connecté.");
+            }
+            if (hero.getAccount().getId() != master.getAccount().getId()) { // Bloc logique : protège contre les emprunts inter-comptes.
+                return HeroOperationResult.error("Le personnage doit appartenir au même compte.");
+            }
+            if (heroToMaster.containsKey(hero.getId())) { // Bloc logique : empêche les doublons côté gestionnaire.
+                return HeroOperationResult.error("Ce héros est déjà actif.");
+            }
+            HeroGroup group = groups.computeIfAbsent(master.getId(), id -> new HeroGroup()); // Bloc logique : obtient ou crée le groupe de héros.
+            if (group.heroes.size() >= HERO_LIMIT) { // Bloc logique : respecte la limite serveur de trois héros.
+                return HeroOperationResult.error("Vous avez déjà trois héros actifs.");
+            }
+            rememberHeroPosition(hero); // Capture la position d'origine pour permettre un retour propre en mode joueur.
+            detachHero(hero); // Supprime tout état résiduel d'une précédente session héros avant rattachement.
+            initializeHeroPosition(master, hero); // Bloc logique : aligne immédiatement la position virtuelle sur celle du maître.
+            group.heroes.put(hero.getId(), hero); // Bloc logique : référence le héros dans le groupe courant.
+            heroToMaster.put(hero.getId(), master.getId()); // Bloc logique : maintient l'index inversé héros -> maître.
+            hero.setEsclave(true); // Bloc logique : marque le héros comme esclave pour éviter les callbacks de synchronisation.
+            attachToParty(master, hero); // Bloc logique : maintient le groupe d'aventuriers cohérent.
+            updatePositionsAfterJoin(master); // Bloc logique : synchronise les positions virtuelles immédiatement après l'ajout.
+            return HeroOperationResult.success("Héros " + hero.getName() + " activé.");
+        } finally {
+            masterSnapshot.restore(master); // Bloc logique : restaure la carte/cellule du maître si une modification s'est produite.
         }
-        Player hero = master.getAccount().getPlayers().get(heroId);
-        if (hero == null) {
-            return HeroOperationResult.error("Aucun personnage avec cet identifiant sur le compte.");
-        }
-        if (hero.getId() == master.getId()) {
-            return HeroOperationResult.error("Le maître ne peut pas être ajouté comme héros.");
-        }
-        if (hero.isOnline()) {
-            return HeroOperationResult.error("Ce personnage est déjà connecté.");
-        }
-        if (hero.getAccount().getId() != master.getAccount().getId()) {
-            return HeroOperationResult.error("Le personnage doit appartenir au même compte.");
-        }
-        if (heroToMaster.containsKey(hero.getId())) {
-            return HeroOperationResult.error("Ce héros est déjà actif.");
-        }
-        HeroGroup group = groups.computeIfAbsent(master.getId(), id -> new HeroGroup());
-        if (group.heroes.size() >= HERO_LIMIT) {
-            return HeroOperationResult.error("Vous avez déjà trois héros actifs.");
-        }
-        rememberHeroPosition(hero); // Capture la position d'origine pour permettre un retour propre en mode joueur.
-        detachHero(hero); // Supprime tout état résiduel d'une précédente session héros avant rattachement.
-        initializeHeroPosition(master, hero);
-        group.heroes.put(hero.getId(), hero);
-        heroToMaster.put(hero.getId(), master.getId());
-        hero.setEsclave(true);
-        attachToParty(master, hero);
-        updatePositionsAfterJoin(master);
-        return HeroOperationResult.success("Héros " + hero.getName() + " activé.");
     }
 
     /**
@@ -89,29 +94,34 @@ public final class HeroManager {
      * @return résultat de l'opération.
      */
     public synchronized HeroOperationResult removeHero(Player master, int heroId) {
-        if (master == null) {
-            return HeroOperationResult.error("Maître introuvable.");
+        MasterPositionSnapshot masterSnapshot = MasterPositionSnapshot.capture(master); // Bloc logique : protège la position du maître pendant le retrait.
+        try {
+            if (master == null) { // Bloc logique : refuse l'opération si aucun maître n'est fourni.
+                return HeroOperationResult.error("Maître introuvable.");
+            }
+            HeroGroup group = groups.get(master.getId()); // Bloc logique : récupère le groupe lié au maître.
+            if (group == null) { // Bloc logique : aucun héros actif sur ce maître.
+                return HeroOperationResult.error("Aucun héros actif.");
+            }
+            Player hero = group.heroes.remove(heroId); // Bloc logique : tente de supprimer le héros ciblé.
+            if (hero == null) { // Bloc logique : identifiant inconnu au bataillon.
+                return HeroOperationResult.error("Ce héros n'est pas actif.");
+            }
+            heroToMaster.remove(hero.getId()); // Bloc logique : purifie l'index croisé.
+            Party party = hero.getParty(); // Bloc logique : conserve une référence pour gérer le groupe.
+            if (party != null) { // Bloc logique : détache le héros du groupe si nécessaire.
+                party.leave(hero);
+            }
+            detachHero(hero); // Bloc logique : repasse le héros en mode joueur isolé.
+            hero.setEsclave(false); // Bloc logique : réactive les callbacks naturels côté joueur.
+            restoreHeroState(hero); // Replace immédiatement le héros sur sa carte d'origine pour une future connexion directe.
+            if (group.heroes.isEmpty()) { // Bloc logique : supprime le groupe orphelin.
+                groups.remove(master.getId());
+            }
+            return HeroOperationResult.success("Héros " + hero.getName() + " déconnecté.");
+        } finally {
+            masterSnapshot.restore(master); // Bloc logique : garantit que la carte du maître reste intacte.
         }
-        HeroGroup group = groups.get(master.getId());
-        if (group == null) {
-            return HeroOperationResult.error("Aucun héros actif.");
-        }
-        Player hero = group.heroes.remove(heroId);
-        if (hero == null) {
-            return HeroOperationResult.error("Ce héros n'est pas actif.");
-        }
-        heroToMaster.remove(hero.getId());
-        Party party = hero.getParty();
-        if (party != null) {
-            party.leave(hero);
-        }
-        detachHero(hero);
-        hero.setEsclave(false);
-        restoreHeroState(hero); // Replace immédiatement le héros sur sa carte d'origine pour une future connexion directe.
-        if (group.heroes.isEmpty()) {
-            groups.remove(master.getId());
-        }
-        return HeroOperationResult.success("Héros " + hero.getName() + " déconnecté.");
     }
 
     /**
@@ -226,23 +236,31 @@ public final class HeroManager {
      * @param master joueur maître.
      */
     public synchronized void removeAllForMaster(Player master) {
-        if (master == null) {
-            return;
-        }
-        HeroGroup group = groups.remove(master.getId());
-        if (group == null) {
-            return;
-        }
-        List<Player> heroes = new ArrayList<>(group.heroes.values());
-        for (Player hero : heroes) {
-            heroToMaster.remove(hero.getId());
-            Party party = hero.getParty();
-            if (party != null) {
-                party.leave(hero);
+        MasterPositionSnapshot masterSnapshot = MasterPositionSnapshot.capture(master); // Bloc logique : photographie la position réelle du maître avant nettoyage.
+        try {
+            if (master == null) { // Bloc logique : aucun traitement si le maître est déjà inconnu.
+                return;
             }
-            detachHero(hero);
-            hero.setEsclave(false);
-            restoreHeroState(hero); // Restaure une carte tangible pour éviter toute reconnexion sur un état virtuel.
+            HeroGroup group = groups.remove(master.getId()); // Bloc logique : extrait le groupe associé pour traitement.
+            if (group == null) { // Bloc logique : rien à faire si aucun héros n'était actif.
+                return;
+            }
+            List<Player> heroes = new ArrayList<>(group.heroes.values()); // Bloc logique : copie défensive pour éviter les ConcurrentModificationException.
+            for (Player hero : heroes) { // Bloc logique : parcours de chaque héros du groupe.
+                if (hero == null) { // Bloc logique : ignore les entrées nulles éventuelles.
+                    continue;
+                }
+                heroToMaster.remove(hero.getId()); // Bloc logique : purifie les index croisés.
+                Party party = hero.getParty(); // Bloc logique : référence éventuelle à un groupe d'aventuriers.
+                if (party != null) { // Bloc logique : coupe proprement le lien de groupe.
+                    party.leave(hero);
+                }
+                detachHero(hero); // Bloc logique : annule toute position virtuelle persistante.
+                hero.setEsclave(false); // Bloc logique : réactive les callbacks côté joueur.
+                restoreHeroState(hero); // Restaure une carte tangible pour éviter toute reconnexion sur un état virtuel.
+            }
+        } finally {
+            masterSnapshot.restore(master); // Bloc logique : réapplique la carte/cellule du maître avant la sauvegarde.
         }
     }
 
@@ -345,28 +363,33 @@ public final class HeroManager {
      * @param master joueur maître dont les héros doivent redevenir virtuels.
      */
     public synchronized void restoreGroupAfterFight(Player master) {
-        if (master == null) { // Bloc logique : rien à synchroniser sans maître défini.
-            return;
-        }
-        if (isHero(master)) { // Bloc logique : un héros ne peut pas être traité comme maître ici.
-            return;
-        }
-        HeroGroup group = groups.get(master.getId()); // Récupère le groupe des héros actifs pour ce maître.
-        if (group == null || group.heroes.isEmpty()) { // Bloc logique : aucun héros actif, rien à faire.
-            return;
-        }
-        GameMap map = master.getCurMap(); // Capture la carte actuelle du maître pour aligner les héros.
-        GameCase cell = master.getCurCell(); // Capture la cellule du maître pour repositionner précisément chaque héros.
-        for (Player hero : group.heroes.values()) { // Parcourt chaque héros actif du groupe.
-            if (hero == null) { // Bloc logique : sécurise contre les références nulles.
-                continue;
+        MasterPositionSnapshot masterSnapshot = MasterPositionSnapshot.capture(master); // Bloc logique : protège l'ancrage du maître pendant la resynchronisation.
+        try {
+            if (master == null) { // Bloc logique : rien à synchroniser sans maître défini.
+                return;
             }
-            hero.setFight(null); // Effet de bord contrôlé : retire toute référence de combat résiduelle.
-            hero.setVirtualPosition(map, cell); // Aligne la position virtuelle sur celle du maître pour rester invisible.
-            hero.refreshLife(false); // Harmonise les points de vie affichés avec ceux calculés pendant le combat.
-            hero.setReady(true); // Prépare le héros pour un prochain combat afin de ne pas bloquer la phase de placement.
+            if (isHero(master)) { // Bloc logique : un héros ne peut pas être traité comme maître ici.
+                return;
+            }
+            HeroGroup group = groups.get(master.getId()); // Récupère le groupe des héros actifs pour ce maître.
+            if (group == null || group.heroes.isEmpty()) { // Bloc logique : aucun héros actif, rien à faire.
+                return;
+            }
+            GameMap map = master.getCurMap(); // Capture la carte actuelle du maître pour aligner les héros.
+            GameCase cell = master.getCurCell(); // Capture la cellule du maître pour repositionner précisément chaque héros.
+            for (Player hero : group.heroes.values()) { // Parcourt chaque héros actif du groupe.
+                if (hero == null) { // Bloc logique : sécurise contre les références nulles.
+                    continue;
+                }
+                hero.setFight(null); // Effet de bord contrôlé : retire toute référence de combat résiduelle.
+                hero.setVirtualPosition(map, cell); // Aligne la position virtuelle sur celle du maître pour rester invisible.
+                hero.refreshLife(false); // Harmonise les points de vie affichés avec ceux calculés pendant le combat.
+                hero.setReady(true); // Prépare le héros pour un prochain combat afin de ne pas bloquer la phase de placement.
+            }
+            updatePositionsAfterJoin(master); // Relance les callbacks de synchronisation pour éviter les décalages ultérieurs.
+        } finally {
+            masterSnapshot.restore(master); // Bloc logique : confirme que le maître reste sur sa carte initiale.
         }
-        updatePositionsAfterJoin(master); // Relance les callbacks de synchronisation pour éviter les décalages ultérieurs.
     }
 
     /**
@@ -528,10 +551,13 @@ public final class HeroManager {
     }
 
     private void detachHero(Player hero) {
-        if (hero == null) {
+        if (hero == null) { // Bloc logique : aucune action si la référence est nulle.
             return;
         }
-        hero.setVirtualPosition(null, null);
+        if (!hero.isEsclave()) { // Bloc logique : évite d'affecter un maître par erreur lors d'un nettoyage global.
+            return;
+        }
+        hero.setVirtualPosition(null, null); // Bloc logique : purge les références de carte/cellule virtuelles.
     }
 
     /**
@@ -549,12 +575,70 @@ public final class HeroManager {
     }
 
     private void updatePositionsAfterJoin(Player master) {
-        // Exécute immédiatement les callbacks de synchronisation pour un héros fraîchement activé.
-        if (master.getCurMap() != null) {
-            onPlayerMapUpdated(master, master.getCurMap());
+        MasterPositionSnapshot masterSnapshot = MasterPositionSnapshot.capture(master); // Bloc logique : garantit une synchronisation strictement unidirectionnelle.
+        try {
+            if (master == null) { // Bloc logique : aucune synchronisation sans maître défini.
+                return;
+            }
+            if (master.getCurMap() != null) { // Bloc logique : propage l'identifiant de carte aux héros actifs.
+                onPlayerMapUpdated(master, master.getCurMap());
+            }
+            if (master.getCurCell() != null) { // Bloc logique : réplique la cellule précise au sein de la carte.
+                onPlayerCellUpdated(master, master.getCurCell());
+            }
+        } finally {
+            masterSnapshot.restore(master); // Bloc logique : vérifie que les callbacks n'ont pas altéré la position réelle.
         }
-        if (master.getCurCell() != null) {
-            onPlayerCellUpdated(master, master.getCurCell());
+    }
+
+    /**
+     * Enveloppe utilitaire pour préserver la position réelle du maître pendant une opération.
+     * <p>
+     * Exemple : {@code MasterPositionSnapshot.capture(master).restore(master);} autour d'un {@link #removeAllForMaster(Player)}<br>
+     * Erreur fréquente : oublier d'appeler {@link #restore(Player)} en sortie, ce qui laisse le maître sans cellule.<br>
+     * Invariant : n'altère jamais la position si aucun déplacement n'a été détecté.<br>
+     * Effet de bord : peut déclencher {@link Player#setCurMap(GameMap)} et {@link Player#setCurCell(GameCase)} si nécessaire.
+     * </p>
+     */
+    private static final class MasterPositionSnapshot {
+        private static final MasterPositionSnapshot EMPTY = new MasterPositionSnapshot(null, null, -1); // Bloc logique : réutilise une instance immuable pour les cas nuls.
+
+        private final GameMap map; // Bloc logique : carte enregistrée.
+        private final GameCase cell; // Bloc logique : cellule enregistrée.
+        private final int orientation; // Bloc logique : orientation initiale.
+
+        private MasterPositionSnapshot(GameMap map, GameCase cell, int orientation) {
+            this.map = map;
+            this.cell = cell;
+            this.orientation = orientation;
+        }
+
+        static MasterPositionSnapshot capture(Player master) {
+            if (master == null) { // Bloc logique : retourne un instantané neutre si aucun maître n'est fourni.
+                return EMPTY;
+            }
+            return new MasterPositionSnapshot(master.getCurMap(), master.getCurCell(), master.get_orientation());
+        }
+
+        void restore(Player master) {
+            if (master == null || this == EMPTY) { // Bloc logique : évite tout travail si la capture est vide.
+                return;
+            }
+            if (master.getCurMap() != this.map && this.map != null) { // Bloc logique : réapplique la carte originale si elle a sauté.
+                master.setCurMap(this.map);
+            }
+            if (this.map == null && master.getCurMap() != null) { // Bloc logique : nettoie la carte si l'état initial était virtuel.
+                master.setCurMap(null);
+            }
+            if (master.getCurCell() != this.cell && this.cell != null) { // Bloc logique : repositionne le maître exactement sur sa cellule d'origine.
+                master.setCurCell(this.cell);
+            }
+            if (this.cell == null && master.getCurCell() != null) { // Bloc logique : purge la cellule si l'état initial l'exigeait.
+                master.setCurCell(null);
+            }
+            if (master.get_orientation() != this.orientation && this.orientation >= 0) { // Bloc logique : réapplique l'orientation si modifiée.
+                master.set_orientation(this.orientation);
+            }
         }
     }
 
@@ -683,5 +767,6 @@ public final class HeroManager {
      * - {@link #findMaster(Player)} permet de sécuriser les accès en resynchronisant un héros avec son maître après un combat.
      * - {@link #ensureStandalone(Player)} est à appeler juste avant {@link Player#OnJoinGame()} pour éviter les cartes nulles.
      * - Les instantanés ({@link HeroSnapshot}) n'occupent qu'un stockage léger et sont purgés dès qu'ils sont réappliqués.
+     * - {@link MasterPositionSnapshot} sécurise la persistance du maître lorsque plusieurs héros sont libérés simultanément.
      */
 }
