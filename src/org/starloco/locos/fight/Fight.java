@@ -3147,6 +3147,47 @@ public class Fight {
         return fighter;
     }
 
+    /**
+     * Retrouve un combattant par son identifiant unique interne au combat.
+     * <p>
+     * Exemple : {@code getFighterById(currentFighterId)} permet d'appliquer un sort ciblé depuis {@link GameClient}.<br>
+     * Cas d'erreur : passer {@code -1} renvoie {@code null}, évitant ainsi de référencer le maître comme combattant autonome.
+     * Invariant : un identifiant connu pointe vers un objet {@link Fighter} vivant ou stocké dans la liste des morts.
+     * Effet de bord : aucun, la méthode effectue uniquement des lectures sur les collections internes.
+     * </p>
+     *
+     * @param fighterId identifiant recherché (utiliser {@code -1} pour indiquer qu'aucun combattant spécifique n'est visé).
+     * @return combattant correspondant ou {@code null} si l'identifiant est inconnu dans le combat courant.
+     */
+    public Fighter getFighterById(int fighterId) {
+        if (fighterId == -1) { // Bloc logique : valeur sentinelle signifiant "pas de combattant ciblé".
+            return null;
+        }
+        Fighter fromTeam0 = this.team0.get(fighterId); // Bloc logique : recherche directe côté équipe 0 (clé = id joueur/monstre).
+        if (fromTeam0 != null) { // Bloc logique : retourne immédiatement si trouvé pour réduire le coût algorithmique.
+            return fromTeam0;
+        }
+        Fighter fromTeam1 = this.team1.get(fighterId); // Bloc logique : inspection symétrique sur l'équipe 1.
+        if (fromTeam1 != null) { // Bloc logique : sortie rapide si le combattant adverse est identifié.
+            return fromTeam1;
+        }
+        Fighter fromDead = this.deadList.get(fighterId); // Bloc logique : inclut les combattants morts pour gérer les effets post-mortem.
+        if (fromDead != null) { // Bloc logique : autorise les résurrections ou logs sur combattants éliminés.
+            return fromDead;
+        }
+        for (Fighter fighter : this.orderPlaying) { // Bloc logique : parcours de la timeline active pour couvrir les invocations.
+            if (fighter != null && fighter.getId() == fighterId) { // Bloc logique : vérifie l'identité sur chaque entrée non nulle.
+                return fighter;
+            }
+        }
+        for (Fighter fighter : this.getFighters(3)) { // Bloc logique : dernier recours couvrant les spectateurs matérialisés.
+            if (fighter != null && fighter.getId() == fighterId) { // Bloc logique : contrôle d'égalité finale pour capturer les cas restants.
+                return fighter;
+            }
+        }
+        return null; // Bloc logique : aucun combattant ne correspond à l'identifiant demandé.
+    }
+
     //v2.8 - remove cell from list if taken, shuffle cells (LDV par case prise par joueur?)
     private GameCase getRandomCell(List<GameCase> cells)
     {
