@@ -4032,9 +4032,9 @@ public class Fight {
                 if(player.getMorphMode())
                     SocketManager.GAME_SEND_SPELL_LIST(player);
             }
-        }
 
-        resyncHeroesAfterFight(fighters); // Bloc logique : replace les héros virtuels dans l'état post-combat.
+            resyncHeroesAfterFight(fighters); // Bloc logique : replace les héros virtuels dans l'état post-combat.
+        }
 
     }
 
