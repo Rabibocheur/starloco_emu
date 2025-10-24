@@ -376,11 +376,11 @@ final class HeroFightController {
     /**
      * Expédie les paquets d'incarnation nécessaires pour aligner le client sur un nouveau personnage contrôlé.
      * <p>
-     * Exemple : {@code sendIncarnationHandshake(client, hero)} après {@link #engageTemporaryIncarnation(Player, Player)}
-     * rafraîchit l'affichage complet du héros.<br>
-     * Erreur fréquente : oublier d'appeler cette méthode juste après un switch, le client resterait alors verrouillé sur l'ancien maître.<br>
-     * Effets de bord : envoie ASK/Stats/Spells/Pods afin que l'interface se mette immédiatement à jour.<br>
-     * Invariant : ne fait rien si la session ou la cible est absente.
+     * Exemple : {@code sendIncarnationHandshake(client, hero)} juste après {@link #engageTemporaryIncarnation(Player, Player)}
+     * garantit que l'UI combat affiche les PA/PM du héros actif sans recharger la map.<br>
+     * Erreur fréquente : appeler cette méthode avec un client déconnecté, rien n'est envoyé et le switch paraît figé côté joueur.<br>
+     * Effets de bord : en combat, seuls Stats/Spells/Pods sont envoyés pour éviter ASK/GDM ; hors combat, le paquet ASK complet est conservé.<br>
+     * Invariant : ne fait rien si la session ou la cible est absente, ce qui protège des NullPointerException pour les débutants.<br>
      * </p>
      *
      * @param client session réseau toujours connectée.
@@ -390,7 +390,20 @@ final class HeroFightController {
         if (client == null || target == null) { // Bloc logique : refuse un envoi si la session ou la cible manque.
             return;
         }
-        SocketManager.GAME_SEND_ASK(client, target); // Effet de bord : annonce au client l'identité et l'équipement du personnage actif.
+        Fight targetFight = target.getFight(); // Bloc logique : identifie un éventuel combat actif pour adapter les paquets.
+        boolean combatContext = targetFight != null && targetFight.isBegin(); // Bloc logique : ne déclenche le mode combat que si la timeline est réellement engagée.
+        if (combatContext) { // Bloc logique : contourne l'envoi de ASK/GDM qui réinitialiserait l'interface en plein combat.
+            SocketManager.GAME_SEND_STATS_PACKET(client, target); // Effet de bord : actualise PV/PA/PM visibles sans toucher à la map.
+            SocketManager.GAME_SEND_SPELL_LIST(client, target); // Bloc logique : synchronise la barre de sorts avec le héros en cours.
+            SocketManager.GAME_SEND_Ow_PACKET(client, target); // Bloc logique : rafraîchit les pods pour éviter un affichage obsolète.
+            if (Logging.USE_LOG) { // Bloc logique : consigne l'absence volontaire de paquet ASK pour debug.
+                int accountId = client.getAccount() != null ? client.getAccount().getId() : -1; // Bloc logique : protège l'accès si l'association compte n'est plus définie.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[HANDSHAKE] Combat session="
+                        + accountId + " cible=" + target.getId());
+            }
+            return; // Bloc logique : interrompt la méthode après les paquets combat dédiés.
+        }
+        SocketManager.GAME_SEND_ASK(client, target); // Effet de bord : annonce au client l'identité et l'équipement du personnage actif hors combat.
         SocketManager.GAME_SEND_STATS_PACKET(client, target); // Bloc logique : actualise la fiche de caractéristiques visible.
         SocketManager.GAME_SEND_SPELL_LIST(client, target); // Effet de bord : synchronise la barre de sorts sur l'incarnation courante.
         SocketManager.GAME_SEND_Ow_PACKET(client, target); // Bloc logique : recalcule l'inventaire (pods) pour l'affichage.
