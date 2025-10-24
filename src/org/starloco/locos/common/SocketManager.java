@@ -176,9 +176,9 @@ public class SocketManager {
         } catch(Exception e) { e.printStackTrace(); System.out.println("Error occured : " + e.getMessage());}
     }
 
-    public static void GAME_SEND_MINI_ASK_PACKET(GameClient client, Player target) {
+    public static void GAME_SEND_MINI_ASK_PACKET(GameClient client, Player target, Fighter fighter) {
         try {
-            send(client, buildAskPacket(target)); // Bloc logique : réutilise le même coeur pour simuler une incarnation sans GDM.
+            send(client, buildCombatAskPacket(target, fighter)); // Bloc logique : n'envoie que l'état combat, évitant GC1/GDM.
         } catch (Exception e) { e.printStackTrace(); System.out.println("Error occured : " + e.getMessage()); }
     }
 
@@ -206,6 +206,41 @@ public class SocketManager {
         packet.append(color3 == -1 ? "-1" : Integer.toHexString(color3)).append("|"); // Bloc logique : convertit la couleur tertiaire.
         packet.append(perso.parseItemToASK()); // Effet de bord : ajoute l'équipement pour dessiner le personnage.
         return packet.toString(); // Bloc logique : renvoie la chaîne prête à l'envoi.
+    }
+
+    private static String buildCombatAskPacket(Player perso, Fighter fighter) {
+        int color1 = perso.getColor1(); // Bloc logique : reprend la palette primaire pour conserver le skin.
+        int color2 = perso.getColor2();
+        int color3 = perso.getColor3();
+        if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION) != null) { // Bloc logique : traite la coiffe vampyro même en combat.
+            if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION).getTemplate().getId() == 10838) { // Bloc logique : identifie l'équipement imposant le blanc.
+                color1 = 16342021; // Bloc logique : ajuste la première composante couleur.
+                color2 = 16342021; // Bloc logique : applique la même teinte sur la seconde composante.
+                color3 = 16342021; // Bloc logique : harmonise la troisième composante.
+            }
+        }
+        int cellId = -1; // Bloc logique : prépare une valeur de repli pour la cellule.
+        if (fighter != null && fighter.getCell() != null) { // Bloc logique : privilégie les informations issues du combat.
+            cellId = fighter.getCell().getId(); // Effet de bord : capture le placement exact du combattant.
+        } else if (perso.getCurCell() != null) { // Bloc logique : retombe sur la dernière cellule connue hors combat.
+            cellId = perso.getCurCell().getId(); // Effet de bord : fournit une position cohérente même sans {@link Fighter}.
+        }
+        StringBuilder packet = new StringBuilder(); // Bloc logique : assemble l'ASK combat dédié.
+        packet.append("ASK_COMBAT|"); // Bloc logique : évite explicitement la séquence de reconnexion classique.
+        packet.append(perso.getId()).append("|");
+        packet.append(perso.getName()).append("|");
+        packet.append(perso.getLevel()).append("|"); // Bloc logique : affiche le niveau exact du combattant actif.
+        packet.append(perso.get_align()).append("|");
+        packet.append(perso.getMorphMode() ? -1 : perso.getClasse()).append("|");
+        packet.append(perso.getSexe()).append("|");
+        packet.append(perso.getGfxId()).append("|");
+        packet.append(color1 == -1 ? "-1" : Integer.toHexString(color1)).append("|");
+        packet.append(color2 == -1 ? "-1" : Integer.toHexString(color2)).append("|");
+        packet.append(color3 == -1 ? "-1" : Integer.toHexString(color3)).append("|");
+        packet.append(cellId).append("|"); // Bloc logique : fournit la cellule cible pour éviter un repositionnement aléatoire.
+        packet.append(perso.get_orientation()).append("|"); // Bloc logique : conserve l'orientation actuelle sur le terrain.
+        packet.append(perso.parseItemToASK()); // Effet de bord : recycle la description d'équipement pour rafraîchir le skin.
+        return packet.toString(); // Bloc logique : livre un paquet autonome, sans GC1/GDM adjoint.
     }
 
     public static void GAME_SEND_ALIGNEMENT(GameClient out, int alliID) {
@@ -274,6 +309,9 @@ public class SocketManager {
 
     public static void GAME_SEND_MAPDATA(GameClient out, int id, String date,
                                          String key) {
+        if (out != null && out.isFighting()) { // Bloc logique : interdit le renvoi de GDM pendant un combat actif.
+            return; // Bloc logique : protège la scène combat d'un rechargement intempestif.
+        }
         String packet = "GDM|" + id + "|" + date + "|" + key;
         send(out, packet);
 
@@ -2797,4 +2835,10 @@ public class SocketManager {
         String packet = "OrR" + pos;
         send(player, packet);
     }
+
+    /** Notes pédagogiques
+     * - Les paquets "ASK_COMBAT" n'entraînent jamais de rechargement de carte ; ne pas les mélanger avec {@link #GAME_SEND_ASK(GameClient, Player)}.
+     * - {@link #buildCombatAskPacket(Player, Fighter)} réutilise la logique de couleurs et d'équipement pour éviter les changements visuels brusques.
+     * - Avant d'envoyer un GDM, vérifier systématiquement {@link GameClient#isFighting()} pour ne pas expulser un joueur d'un combat.
+     */
 }
