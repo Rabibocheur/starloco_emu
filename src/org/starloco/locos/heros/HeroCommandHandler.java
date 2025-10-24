@@ -65,6 +65,21 @@ public final class HeroCommandHandler {
                     master.sendErrorMessage(removeResult.getMessage());
                 }
                 return true;
+            case "switch":
+                if (parts.length < 3) {
+                    master.sendErrorMessage("Format attendu : .heros switch [idPerso]");
+                    return true;
+                }
+                Integer switchId = parseId(parts[2]);
+                if (switchId == null) {
+                    master.sendErrorMessage("L'identifiant doit être numérique.");
+                    return true;
+                }
+                HeroManager.HeroOperationResult switchResult = manager.switchMaster(master, switchId);
+                if (!switchResult.isSuccess()) {
+                    master.sendErrorMessage(switchResult.getMessage());
+                }
+                return true;
             case "list":
                 master.sendMessage(manager.describe(master));
                 return true;
@@ -75,7 +90,7 @@ public final class HeroCommandHandler {
     }
 
     private static void sendUsage(Player master) {
-        master.sendInformationMessage("Utilisation : .heros [add|connect|disconnect|list] [idPerso]");
+        master.sendInformationMessage("Utilisation : .heros [add|connect|disconnect|switch|list] [idPerso]");
     }
 
     private static String sanitize(String rawMessage) {
