@@ -292,6 +292,11 @@ public final class HeroManager {
             return false;
         }
         activeHeroControl.put(master.getId(), actor);
+        client.setControlledFighterId(fighter.getId()); // Bloc logique : mémorise l'identifiant du héros pour les paquets sortants.
+        SocketManager.GAME_SEND_GIC_PACKET(master, fighter); // Force l'interface à indiquer le héros comme combattant actif.
+        SocketManager.GAME_SEND_GAS_PACKET(master, fighter.getId()); // Signale le changement de contrôle au client du maître.
+        SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Rafraîchit la timeline pour afficher les PA/PM corrects.
+        SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Met à jour les stats du tour pour ce client uniquement.
         SocketManager.GAME_SEND_STATS_PACKET(client, actor); // Met à jour la fiche de caractéristiques côté maître.
         SocketManager.GAME_SEND_SPELL_LIST(client, actor); // Synchronise la barre de sorts avec ceux du héros actif.
         SocketManager.GAME_SEND_Ow_PACKET(client, actor); // Actualise les points de pods pour éviter des incohérences d'inventaire.
@@ -588,9 +593,19 @@ public final class HeroManager {
         if (client == null) { // Bloc logique : aucun envoi si le maître est déjà déconnecté.
             return;
         }
+        client.clearControlledFighter(); // Bloc logique : libère immédiatement la redirection réseau vers le héros.
         SocketManager.GAME_SEND_STATS_PACKET(client, master); // Réaffiche les caractéristiques du maître côté client.
         SocketManager.GAME_SEND_SPELL_LIST(client, master); // Restaure la barre de sorts d'origine.
         SocketManager.GAME_SEND_Ow_PACKET(client, master); // Recalcule les pods visibles pour éviter toute confusion.
+        Fight fight = master.getFight(); // Bloc logique : récupère le combat courant pour renvoyer les bonnes timelines.
+        if (fight != null) { // Bloc logique : en dehors d'un combat, aucun paquet spécifique n'est nécessaire.
+            Fighter masterFighter = fight.getFighterByPerso(master); // Recherche du combattant du maître.
+            if (masterFighter != null) { // Bloc logique : uniquement si le maître est bien présent dans le combat.
+                SocketManager.GAME_SEND_GIC_PACKET(master, masterFighter); // Replace l'icône de combattant actif sur le maître.
+                SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Réaffiche la timeline côté client maître.
+                SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Actualise les informations de vie/PA/PM du maître.
+            }
+        }
     }
 
     private void rememberHeroPosition(Player hero) {
@@ -828,9 +843,10 @@ public final class HeroManager {
 
     /** Notes pédagogiques
      * - Utiliser {@link #getActiveHeroes(Player)} avant un combat pour récupérer l'ordre d'apparition des héros.
-     * - {@link #prepareTurnControl(Fight, Fighter)} déclenche l'envoi des statistiques du héros au maître avant chaque tour.
+     * - {@link #prepareTurnControl(Fight, Fighter)} émet désormais GIC/GAS/GTL/GTM ciblés afin d'afficher le héros actif chez le maître.
      * - {@link #finalizeTurnControl(Fighter)} restitue automatiquement l'interface du maître une fois le tour du héros terminé.
      * - {@link #resolveControlledActor(Player)} permet aux paquets entrants d'identifier le bon combattant à piloter.
+     * - {@link GameClient#setControlledFighterId(Integer)} est synchronisé ici pour verrouiller les actions réseau sur le bon héros.
      * - Les instantanés ({@link HeroSnapshot}) restent indispensables pour restaurer proprement les positions hors combat.
      */
 }

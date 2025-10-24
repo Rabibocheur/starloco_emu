@@ -803,6 +803,24 @@ public class SocketManager {
 
     }
 
+    /**
+     * Envoie un paquet GIC isolé à un joueur spécifique.
+     * <p>
+     * Exemple : {@code GAME_SEND_GIC_PACKET(master, fighter)} force l'interface du maître à suivre le héros.<br>
+     * Cas d'erreur : si la cellule du combattant est inconnue, aucun paquet n'est transmis.
+     * </p>
+     *
+     * @param out     joueur ciblé.
+     * @param fighter combattant à mettre en avant.
+     */
+    public static void GAME_SEND_GIC_PACKET(Player out, Fighter fighter) {
+        if (out == null || fighter == null || fighter.getCell() == null) { // Bloc logique : vérifie les prérequis réseau minimaux.
+            return;
+        }
+        String packet = "GIC|" + fighter.getId() + ";" + fighter.getCell().getId() + ";1|"; // Construit le message ciblant un seul combattant.
+        send(out, packet);
+    }
+
     public static void GAME_SEND_GS_PACKET_TO_FIGHT(Fight fight, int teams) {
         String packet = "GS";
         for (Fighter f : fight.getFighters(teams)) {
@@ -929,6 +947,23 @@ public class SocketManager {
             send(f.getPersonnage(), packet);
         }
 
+    }
+
+    /**
+     * Envoie un paquet GAS ciblé pour notifier un changement de combattant actif.
+     * <p>
+     * Exemple : {@code GAME_SEND_GAS_PACKET(master, 123)} informe uniquement le maître que le combattant #123 joue.<br>
+     * Effet de bord : le client actualise immédiatement sa timeline active.
+     * </p>
+     *
+     * @param out  joueur concerné par la notification.
+     * @param guid identifiant du combattant actif.
+     */
+    public static void GAME_SEND_GAS_PACKET(Player out, int guid) {
+        if (out == null) { // Bloc logique : évite les envois inutiles vers une session inexistante.
+            return;
+        }
+        send(out, "GAS" + guid); // Message minimaliste conforme au protocole officiel.
     }
 
     public static void GAME_SEND_GA_PACKET_TO_FIGHT(Fight fight, int teams,

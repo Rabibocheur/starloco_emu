@@ -3126,6 +3126,26 @@ public class Fight {
         return fighters;
     }
 
+    /**
+     * Retourne un combattant en fonction de son identifiant unique.
+     * <p>
+     * Exemple : {@code getFighterById(123)} permet au client du maître d'exécuter les actions du héros #123.<br>
+     * Cas d'erreur fréquent : appeler cette méthode après la mort du combattant, ce qui renverra {@code null}.<br>
+     * Effet de bord : aucun, la méthode effectue une simple recherche linéaire.
+     * </p>
+     *
+     * @param fighterId identifiant recherché.
+     * @return combattant correspondant ou {@code null} si absent.
+     */
+    public Fighter getFighterById(int fighterId) {
+        for (Fighter fighter : getFighters(3)) { // Bloc logique : parcourt l'ensemble des combattants visibles.
+            if (fighter != null && fighter.getId() == fighterId) { // Bloc logique : vérifie la correspondance d'identifiant.
+                return fighter; // Bloc logique : retourne immédiatement le combattant ciblé.
+            }
+        }
+        return null; // Bloc logique : aucune correspondance trouvée.
+    }
+
     public ArrayList<Fighter> getFighters2(int teams) {
         ArrayList<Fighter> fighters = new ArrayList<>();
 
@@ -6027,6 +6047,7 @@ public class Fight {
      * - {@link #registerHeroesForMaster(Player, int, Fighter)} insère les héros dès la phase de placement pour garantir leur visibilité.
      * - Le début de tour coopère avec {@link HeroManager#prepareTurnControl(Fight, Fighter)} afin de déléguer le pilotage des héros au maître connecté.
      * - {@link HeroManager#finalizeTurnControl(Fighter)} est invoqué via {@link #endTurn(boolean)} pour restituer l'interface au maître en fin de tour.
+     * - {@link #getFighterById(int)} accélère la résolution du combattant contrôlé depuis la couche réseau du client maître.
      * - {@link #resyncHeroesAfterFight(Collection)} replace les héros en mode virtuel à la fin d'un combat.
      */
 }

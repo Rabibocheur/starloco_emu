@@ -85,6 +85,7 @@ public class GameClient {
             "</cross-domain-policy>";
     private Account account;
     private Player player;
+    private Integer controlledFighterId; // Stocke l'identifiant du combattant actuellement piloté par la session.
     private boolean walk = false;
     private AdminUser adminUser;
     private final Map<Integer, GameAction> actions = new HashMap<>();
@@ -115,6 +116,40 @@ public class GameClient {
     }
 
     /**
+     * Déclare le combattant actuellement contrôlé en combat.
+     * <p>
+     * Exemple : {@code setControlledFighterId(123)} force les actions à utiliser le combattant #123.<br>
+     * Invariant : la valeur {@code null} signifie que le maître reprend la main sans héros intermédiaire.<br>
+     * Effet de bord : aucun, la méthode ne touche pas aux états de combat.
+     * </p>
+     *
+     * @param fighterId identifiant du combattant à piloter ou {@code null} pour libérer le contrôle.
+     */
+    public void setControlledFighterId(Integer fighterId) {
+        this.controlledFighterId = fighterId; // Mémorise l'identifiant reçu avant l'interprétation des paquets.
+    }
+
+    /**
+     * Réinitialise explicitement le combattant contrôlé.
+     * <p>
+     * Exemple : appeler {@code clearControlledFighter()} après la fin d'un tour de héros.<br>
+     * Invariant : après appel, {@link #resolveFightActor()} retombe toujours sur le maître.
+     * </p>
+     */
+    public void clearControlledFighter() {
+        this.controlledFighterId = null; // Bloc logique : un {@code null} neutralise toute redirection héroïque.
+    }
+
+    /**
+     * Retourne l'identifiant du combattant actuellement piloté.
+     *
+     * @return identifiant ou {@code null} si le maître est la référence.
+     */
+    public Integer getControlledFighterId() {
+        return this.controlledFighterId; // Permet aux gestionnaires externes de lire l'état courant.
+    }
+
+    /**
      * Sélectionne le personnage dont les actions de combat doivent être interprétées.
      * <p>
      * Exemple : lors d'un tour de héros, {@code resolveFightActor()} renvoie ce héros au lieu du maître.<br>
@@ -124,9 +159,19 @@ public class GameClient {
      * @return joueur actif (héros contrôlé ou maître par défaut).
      */
     private Player resolveFightActor() {
-        Player sessionPlayer = this.player;
-        Player resolved = HeroManager.getInstance().resolveControlledActor(sessionPlayer); // Identifie le combattant réellement piloté par la session.
-        return resolved != null ? resolved : sessionPlayer;
+        Player sessionPlayer = this.player; // Bloc logique : capture le joueur lié à la session.
+        if (sessionPlayer == null) { // Bloc logique : aucun joueur connecté, aucune action à rediriger.
+            return null;
+        }
+        Fight activeFight = sessionPlayer.getFight(); // Bloc logique : identifie le combat courant si existant.
+        if (activeFight != null && this.controlledFighterId != null) { // Bloc logique : ne cherche un héros que si un identifiant a été fourni.
+            Fighter targeted = activeFight.getFighterById(this.controlledFighterId); // Recherche directe du combattant contrôlé.
+            if (targeted != null && targeted.getPersonnage() != null) { // Bloc logique : confirme que le combattant représente bien un joueur.
+                return targeted.getPersonnage(); // Retourne immédiatement le héros actuellement piloté.
+            }
+        }
+        Player resolved = HeroManager.getInstance().resolveControlledActor(sessionPlayer); // Identifie le combattant réellement piloté par la session via le gestionnaire.
+        return resolved != null ? resolved : sessionPlayer; // Bloc logique : fallback garantissant toujours un joueur valide.
     }
 
     public Account getAccount() {
@@ -7760,4 +7805,11 @@ public class GameClient {
             e.printStackTrace();
         }
     }
+
+    /** Notes pédagogiques
+     * - {@link #setControlledFighterId(Integer)} verrouille les actions réseau sur le héros actif indiqué par le serveur.
+     * - {@link #resolveFightActor()} privilégie la résolution directe via l'identifiant de combattant avant de consulter le {@link HeroManager}.
+     * - Les méthodes {@link #clearControlledFighter()} et {@link #getControlledFighterId()} facilitent la synchronisation avec {@link HeroManager#finalizeTurnControl(Fighter)}.
+     * - Toute nouvelle logique de combat doit appeler {@link #resolveFightActor()} pour garantir la compatibilité multi-héros.
+     */
 }
