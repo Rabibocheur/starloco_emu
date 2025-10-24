@@ -25,6 +25,7 @@ import org.starloco.locos.fight.turn.Turn;
 import org.starloco.locos.game.action.GameAction;
 import org.starloco.locos.game.GameClient;
 import org.starloco.locos.kernel.Logging;
+import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.other.Action;
 import org.starloco.locos.game.world.World;
 import org.starloco.locos.game.world.World.Couple;
@@ -146,6 +147,8 @@ public class Fight {
         getInit0().setTeam(0);
         getInit1().getPersonnage().setFight(this);
         getInit1().setTeam(1);
+        registerHeroesForMaster(perso, 0, getInit0()); // Bloc logique : insère les héros du maître dès la création du combat.
+        registerHeroesForMaster(init2, 1, getInit1()); // Bloc logique : insère les héros de l'adversaire si présents.
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit0().getPersonnage().getCurMap(), getInit0().getId());
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit1().getPersonnage().getCurMap(), getInit1().getId());
         if (getType() == 1) {
@@ -226,6 +229,7 @@ public class Fight {
 
         getInit0().getPersonnage().setFight(this);
         getInit0().setTeam(0);
+        registerHeroesForMaster(perso, 0, getInit0()); // Bloc logique : ajoute les héros du maître dans ce mode PvM.
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit0().getPersonnage().getCurMap(), getInit0().getId());
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit0().getPersonnage().getCurMap(), group.getId());
 
@@ -394,6 +398,7 @@ public class Fight {
 
         getInit0().getPersonnage().setFight(this);
         getInit0().setTeam(0);
+        registerHeroesForMaster(perso, 0, getInit0()); // Bloc logique : ajoute les héros du défenseur contre le percepteur.
 
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit0().getPersonnage().getCurMap(), getInit0().getId());
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit0().getPersonnage().getCurMap(), perco.getId());
@@ -491,6 +496,7 @@ public class Fight {
         getInit0().getCell().addFighter(getInit0());
         getInit0().getPersonnage().setFight(this);
         getInit0().setTeam(0);
+        registerHeroesForMaster(perso, 0, getInit0()); // Bloc logique : intègre les héros du défenseur face au prisme.
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit0().getPersonnage().getCurMap(), getInit0().getId());
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(getInit0().getPersonnage().getCurMap(), Prisme.getId());
 
@@ -1613,6 +1619,10 @@ public class Fight {
       SocketManager.GAME_SEND_GAMETURNSTART_PACKET_TO_FIGHT(this,7,current.getId(),Constant.TIME_BY_TURN, turns);
       current.setCanPlay(true);
       this.turn=new Turn(this,current);
+      if (shouldAutoSkipTurn(current)) { // Bloc logique : déclenche le passage de tour immédiat pour un héros virtuel.
+          TimerWaiter.addNext(() -> this.endTurn(false, current), 200, TimeUnit.MILLISECONDS, TimerWaiter.DataType.FIGHT); // Programme une fin de tour rapide pour laisser le client refléter le changement.
+          return;
+      }
 
       // Gestion des glyphes
       ArrayList<Glyph> glyphs=new ArrayList<>(this.getAllGlyphs());// Copie du tableau
@@ -3151,6 +3161,125 @@ public class Fight {
       return null;
     }
 
+    /**
+     * Ajoute automatiquement les héros virtuels du maître à l'équipe correspondante.
+     * <p>
+     * Exemple : {@code registerHeroesForMaster(master, 0, getInit0())} place chaque héros sur une case de départ libre.<br>
+     * Invariant : aucun combattant n'est doublonné dans la même équipe ; chaque héros conserve son statut d'esclave.<br>
+     * Effet de bord : émet les paquets réseau pour afficher les héros dans la timeline et sur la grille.
+     * </p>
+     *
+     * @param master joueur maître contrôlant les héros.
+     * @param teamId identifiant d'équipe ({@code 0} ou {@code 1}).
+     * @param anchor combattant de référence pour les paquets d'ajout.
+     */
+    private void registerHeroesForMaster(Player master, int teamId, Fighter anchor) {
+        if (master == null) { // Bloc logique : sans maître, aucun héros ne peut être ajouté.
+            return;
+        }
+        HeroManager heroManager = HeroManager.getInstance(); // Référence centralisée pour la gestion des héros.
+        List<Player> heroes = heroManager.getActiveHeroes(master); // Liste instantanée des héros actifs.
+        if (heroes.isEmpty()) { // Bloc logique : stop si aucun héros n'est déclaré.
+            return;
+        }
+        ArrayList<GameCase> placementCells = teamId == 0 ? this.start0 : this.start1; // Sélectionne les cases de départ adaptées à l'équipe.
+        Map<Integer, Fighter> team = teamId == 0 ? this.team0 : this.team1; // Référence interne de l'équipe ciblée.
+        GameMap broadcastMap = (anchor != null && anchor.getPersonnage() != null) // Bloc logique : carte originale pour la diffusion réseau.
+                ? anchor.getPersonnage().getCurMap()
+                : null;
+        for (Player hero : heroes) { // Parcourt tous les héros à incorporer dans le combat.
+            if (hero == null) { // Bloc logique : ignore les entrées nulles éventuelles.
+                continue;
+            }
+            if (team.containsKey(hero.getId())) { // Bloc logique : évite l'insertion multiple du même héros.
+                continue;
+            }
+            GameCase heroCell = getRandomCell(placementCells); // Sélectionne une cellule libre pour ce héros.
+            if (heroCell == null) { // Bloc logique : abandonne si plus aucune case de placement disponible.
+                continue;
+            }
+            Fighter heroFighter = new Fighter(this, hero); // Instancie un combattant serveur pour le héros virtuel.
+            heroFighter.setTeam(teamId); // Affecte l'équipe correcte au héros.
+            heroFighter.setCell(heroCell); // Positionne logiquement le combattant sur la carte de combat.
+            heroCell.addFighter(heroFighter); // Enregistre la présence du combattant sur la cellule pour les collisions.
+            hero.setFight(this); // Lie le héros au combat courant pour les calculs d'XP et de drops.
+            hero.setVirtualPosition(getMap(), heroCell); // Synchronise la position virtuelle pour maintenir l'invisibilité hors combat.
+            hero.setReady(true); // Le héros est prêt par défaut afin de ne pas bloquer la phase de placement.
+            hero.setAway(false); // Garantie qu'aucun état "absent" n'empêche la participation automatique.
+            hero.setDuelId(-1); // Nettoie tout duel résiduel pour éviter les conflits de statut.
+            hero.setDoAction(false); // Réinitialise les actions pour éliminer les blocages éventuels.
+            hero.setGameAction(null); // Nettoie les actions en file côté serveur.
+            team.put(hero.getId(), heroFighter); // Inscrit le héros dans la table des combattants de l'équipe.
+            SocketManager.GAME_SEND_GA_PACKET_TO_FIGHT(this, 3, 950, hero.getId() + "", hero.getId() + "," + Constant.ETAT_PORTE + ",0"); // Diffuse un état neutre pour le héros (porté).
+            SocketManager.GAME_SEND_GA_PACKET_TO_FIGHT(this, 3, 950, hero.getId() + "", hero.getId() + "," + Constant.ETAT_PORTEUR + ",0"); // Diffuse un état neutre pour le héros (porteur).
+            if (broadcastMap != null) { // Bloc logique : n'envoie le paquet d'équipe que si une carte d'origine est disponible.
+                SocketManager.GAME_SEND_ADD_IN_TEAM_PACKET_TO_MAP(broadcastMap, anchor.getId(), heroFighter);
+            }
+            SocketManager.GAME_SEND_FIGHT_PLAYER_JOIN(this, 7, heroFighter); // Informe tous les combattants de l'arrivée du héros.
+        }
+    }
+
+    /**
+     * Replace les héros en mode virtuel après la fin du combat pour chaque maître concerné.
+     * <p>
+     * Exemple : {@code resyncHeroesAfterFight(fighters)} réapplique {@link HeroManager#restoreGroupAfterFight(Player)} pour tous les maîtres présents.<br>
+     * Invariant : chaque maître est traité une seule fois, même si plusieurs héros étaient impliqués.<br>
+     * Effet de bord : déclenche la resynchronisation des positions virtuelles via le {@link HeroManager}.
+     * </p>
+     *
+     * @param fighters collection de combattants participant au combat.
+     */
+    private void resyncHeroesAfterFight(Collection<Fighter> fighters) {
+        if (fighters == null || fighters.isEmpty()) { // Bloc logique : rien à traiter si la liste est vide.
+            return;
+        }
+        HeroManager heroManager = HeroManager.getInstance(); // Accès centralisé au gestionnaire de héros.
+        Set<Integer> processedMasters = new HashSet<>(); // Suit les maîtres déjà resynchronisés.
+        for (Fighter fighter : fighters) { // Parcourt tous les combattants ayant participé.
+            if (fighter == null) { // Bloc logique : ignore les entrées invalides.
+                continue;
+            }
+            Player participant = fighter.getPersonnage(); // Récupère le joueur associé au combattant.
+            if (participant == null) { // Bloc logique : ignore les invocations ou entités non joueurs.
+                continue;
+            }
+            Player master = heroManager.isHero(participant) // Bloc logique : détermine si le combattant est un héros.
+                    ? heroManager.findMaster(participant)
+                    : participant;
+            if (master == null) { // Bloc logique : aucun maître associé, on passe au suivant.
+                continue;
+            }
+            if (heroManager.isHero(master)) { // Bloc logique : évite les boucles si le maître retourné est lui-même un héros.
+                continue;
+            }
+            if (!processedMasters.add(master.getId())) { // Bloc logique : ne traite chaque maître qu'une seule fois.
+                continue;
+            }
+            heroManager.restoreGroupAfterFight(master); // Réactive le mode virtuel pour les héros du maître.
+        }
+    }
+
+    /**
+     * Indique si le combattant doit passer son tour instantanément car il s'agit d'un héros serveur.
+     * <p>
+     * Exemple : {@code shouldAutoSkipTurn(fighter)} retourne {@code true} pour les héros ajoutés automatiquement.<br>
+     * Invariant : seules les entités jouables liées à un héros déclenchent un saut automatique.
+     * </p>
+     *
+     * @param fighter combattant courant.
+     * @return {@code true} si le tour doit être sauté automatiquement.
+     */
+    private boolean shouldAutoSkipTurn(Fighter fighter) {
+        if (fighter == null) { // Bloc logique : aucun combattant fourni.
+            return false;
+        }
+        Player player = fighter.getPersonnage(); // Récupère le joueur associé si disponible.
+        if (player == null) { // Bloc logique : les entités non joueurs jouent normalement.
+            return false;
+        }
+        return HeroManager.getInstance().isHero(player); // Les héros virtuels sautent systématiquement leur tour.
+    }
+
     public synchronized void exchangePlace(Player perso, int cell) {
         Fighter fighter = getFighterByPerso(perso);
         assert fighter != null;
@@ -3904,6 +4033,8 @@ public class Fight {
                     SocketManager.GAME_SEND_SPELL_LIST(player);
             }
         }
+
+        resyncHeroesAfterFight(fighters); // Bloc logique : replace les héros virtuels dans l'état post-combat.
 
     }
 
@@ -5911,4 +6042,10 @@ public class Fight {
         }
         return current;
     }
+
+    /** Notes pédagogiques
+     * - {@link #registerHeroesForMaster(Player, int, Fighter)} insère les héros dès la phase de placement pour garantir leur visibilité.
+     * - {@link #shouldAutoSkipTurn(Fighter)} sécurise le passage de tour automatique des héros côté serveur.
+     * - {@link #resyncHeroesAfterFight(Collection)} replace les héros en mode virtuel à la fin d'un combat.
+     */
 }

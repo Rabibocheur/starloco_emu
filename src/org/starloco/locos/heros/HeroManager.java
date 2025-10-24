@@ -7,6 +7,7 @@ import org.starloco.locos.client.other.Party;
 import org.starloco.locos.database.Database;
 import org.starloco.locos.common.SocketManager;
 import org.starloco.locos.game.GameClient;
+import org.starloco.locos.game.world.World;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -265,6 +266,73 @@ public final class HeroManager {
     }
 
     /**
+     * Retrouve le maître associé à un héros actif.
+     * <p>
+     * Exemple : {@code findMaster(hero)} renvoie le joueur contrôleur si le héros appartient encore au groupe.<br>
+     * Invariant : la méthode ne crée aucune nouvelle association, elle se contente de retourner une référence existante.<br>
+     * Effet de bord : aucun, le cache interne n'est pas modifié.
+     * </p>
+     *
+     * @param hero personnage héros dont on souhaite obtenir le maître.
+     * @return instance du maître ou {@code null} si inconnue.
+     */
+    public synchronized Player findMaster(Player hero) {
+        if (hero == null) { // Bloc logique : impossible de trouver un maître sans héros fourni.
+            return null;
+        }
+        Integer masterId = heroToMaster.get(hero.getId()); // Recherche directe du maître via l'index interne.
+        if (masterId == null) { // Bloc logique : aucun lien maître -> héros n'est enregistré.
+            return null;
+        }
+        Player master = World.world.getPlayer(masterId); // Tente de récupérer le maître actuellement connecté.
+        if (master != null) { // Bloc logique : si le maître est en mémoire active, on peut le retourner immédiatement.
+            return master;
+        }
+        HeroGroup group = groups.get(masterId); // Récupère la structure pour un éventuel maître non chargé.
+        if (group == null) { // Bloc logique : le maître n'a plus de groupe actif.
+            return null;
+        }
+        return hero.getAccount() != null // Bloc logique : tente un fallback via le compte si disponible.
+                ? hero.getAccount().getPlayers().get(masterId)
+                : null;
+    }
+
+    /**
+     * Replace tous les héros virtuels du maître sur la carte à la fin d'un combat.
+     * <p>
+     * Exemple : après un combat, {@code restoreGroupAfterFight(master)} repositionne chaque héros sur la cellule du maître.<br>
+     * Invariant : les héros conservent le statut d'esclave ({@link Player#isEsclave()}) et restent invisibles sur la carte.<br>
+     * Effet de bord : réinitialise {@link Player#setFight(org.starloco.locos.fight.Fight)} à {@code null} pour les héros.
+     * </p>
+     *
+     * @param master joueur maître dont les héros doivent redevenir virtuels.
+     */
+    public synchronized void restoreGroupAfterFight(Player master) {
+        if (master == null) { // Bloc logique : rien à synchroniser sans maître défini.
+            return;
+        }
+        if (isHero(master)) { // Bloc logique : un héros ne peut pas être traité comme maître ici.
+            return;
+        }
+        HeroGroup group = groups.get(master.getId()); // Récupère le groupe des héros actifs pour ce maître.
+        if (group == null || group.heroes.isEmpty()) { // Bloc logique : aucun héros actif, rien à faire.
+            return;
+        }
+        GameMap map = master.getCurMap(); // Capture la carte actuelle du maître pour aligner les héros.
+        GameCase cell = master.getCurCell(); // Capture la cellule du maître pour repositionner précisément chaque héros.
+        for (Player hero : group.heroes.values()) { // Parcourt chaque héros actif du groupe.
+            if (hero == null) { // Bloc logique : sécurise contre les références nulles.
+                continue;
+            }
+            hero.setFight(null); // Effet de bord contrôlé : retire toute référence de combat résiduelle.
+            hero.setVirtualPosition(map, cell); // Aligne la position virtuelle sur celle du maître pour rester invisible.
+            hero.refreshLife(false); // Harmonise les points de vie affichés avec ceux calculés pendant le combat.
+            hero.setReady(true); // Prépare le héros pour un prochain combat afin de ne pas bloquer la phase de placement.
+        }
+        updatePositionsAfterJoin(master); // Relance les callbacks de synchronisation pour éviter les décalages ultérieurs.
+    }
+
+    /**
      * Appelé lors d'un changement de carte du maître.
      *
      * @param player maître concerné.
@@ -482,4 +550,10 @@ public final class HeroManager {
     private static final class HeroGroup {
         private final Map<Integer, Player> heroes = new LinkedHashMap<>();
     }
+
+    /** Notes pédagogiques
+     * - Utiliser {@link #getActiveHeroes(Player)} avant un combat pour récupérer l'ordre d'apparition des héros.
+     * - {@link #restoreGroupAfterFight(Player)} garantit que les héros restent invisibles sur la carte principale.
+     * - {@link #findMaster(Player)} permet de sécuriser les accès en resynchronisant un héros avec son maître après un combat.
+     */
 }
