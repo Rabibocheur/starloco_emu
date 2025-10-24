@@ -820,9 +820,13 @@ public class SocketManager {
         if (fighter.getCell() == null) { // Bloc logique : le client exige une cellule connue pour rafraîchir l'UI.
             return;
         }
+        GameClient client = out.getGameClient(); // Bloc logique : récupère la session active du joueur pour contourner le filtre "héros".
+        if (client == null) { // Bloc logique : évite toute tentative d'envoi si le joueur vient de se déconnecter.
+            return;
+        }
         StringBuilder packet = new StringBuilder("GIC|"); // Bloc logique : prépare le format GIC standard.
         packet.append(fighter.getId()).append(";").append(fighter.getCell().getId()).append(";1|"); // Bloc logique : encode l'identifiant, la cellule et le drapeau de sélection.
-        send(out, packet.toString()); // Bloc logique : expédie immédiatement le paquet au joueur ciblé.
+        send(client, packet.toString()); // Bloc logique : expédie immédiatement le paquet au joueur ciblé en ignorant le statut de héros.
     }
 
     public static void GAME_SEND_GS_PACKET_TO_FIGHT(Fight fight, int teams) {
@@ -967,7 +971,11 @@ public class SocketManager {
         if (out == null) { // Bloc logique : sans destinataire, aucune information à envoyer.
             return;
         }
-        send(out, "GAS" + fighterId); // Bloc logique : Gère la sélection d'un combattant côté client.
+        GameClient client = out.getGameClient(); // Bloc logique : cible directement la session réseau active du joueur maître.
+        if (client == null) { // Bloc logique : protège contre les paquets envoyés juste après une déconnexion.
+            return;
+        }
+        send(client, "GAS" + fighterId); // Bloc logique : Gère la sélection d'un combattant côté client sans passer par le filtre "héros".
     }
 
     public static void GAME_SEND_GA_PACKET_TO_FIGHT(Fight fight, int teams,
