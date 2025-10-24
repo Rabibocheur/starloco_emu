@@ -22,6 +22,7 @@ final class HeroFightController {
 
     private final HeroManager heroManager; // Référence principale pour accéder aux métadonnées des héros.
     private final Map<Integer, Player> activeHeroControl = new ConcurrentHashMap<>(); // Mémorise quel héros est piloté par chaque maître.
+    private final Map<Integer, Player> sessionIncarnationSnapshots = new ConcurrentHashMap<>(); // Capture le personnage incarné avant de basculer temporairement sur un héros.
 
     /**
      * Initialise un contrôleur de combat adossé au gestionnaire fourni.
@@ -47,6 +48,7 @@ final class HeroFightController {
             return;
         }
         activeHeroControl.remove(master.getId()); // Effet de bord : le client repassera sur le personnage par défaut au prochain tick.
+        restorePrimaryIncarnation(master); // Bloc logique : replace aussitôt l'incarnation réseau sur le maître historique.
     }
 
     /**
@@ -56,6 +58,7 @@ final class HeroFightController {
      */
     void clearManualControl(int masterId) {
         activeHeroControl.remove(masterId); // Bloc logique : supprime le lien résiduel sans nécessité d'instancier le joueur.
+        sessionIncarnationSnapshots.remove(masterId); // Bloc logique : oublie toute incarnation temporaire précédemment mémorisée.
     }
 
     /**
@@ -78,6 +81,10 @@ final class HeroFightController {
             return;
         }
         activeHeroControl.put(newMaster.getId(), transferred); // Effet de bord : le nouveau maître retrouve le même combattant actif.
+        Player snapshot = sessionIncarnationSnapshots.remove(previousMaster.getId()); // Bloc logique : récupère l'incarnation initiale stockée.
+        if (snapshot != null) { // Bloc logique : propage la référence de maître original uniquement si elle existait.
+            sessionIncarnationSnapshots.put(newMaster.getId(), snapshot); // Effet de bord : garantit que la restauration utilisera la même ancre.
+        }
     }
 
     /**
@@ -117,6 +124,7 @@ final class HeroFightController {
             return false;
         }
         activeHeroControl.put(master.getId(), actor); // Bloc logique : mémorise quel héros est désormais piloté.
+        engageTemporaryIncarnation(master, actor); // Effet de bord : bascule la session réseau du maître sur le héros actif pendant ce tour.
         client.setControlledFighterId(fighter.getId()); // Effet de bord : informe le client du combattant actif.
         SocketManager.GAME_SEND_GIC_PACKET(master, fighter); // Bloc logique : centre l'interface combat sur le héros ciblé.
         SocketManager.GAME_SEND_GAS_PACKET(master, fighter.getId()); // Bloc logique : actualise l'ordre de jeu côté client.
@@ -198,6 +206,7 @@ final class HeroFightController {
             return;
         }
         activeHeroControl.remove(master.getId()); // Effet de bord : coupe la redirection des commandes côté serveur.
+        restorePrimaryIncarnation(master); // Effet de bord : replace l'incarnation réseau sur le maître (ou le joueur initial mémorisé).
         GameClient client = master.getGameClient();
         if (client == null) { // Bloc logique : aucun envoi si le maître est déjà déconnecté.
             return;
@@ -218,11 +227,70 @@ final class HeroFightController {
         SocketManager.GAME_SEND_Ow_PACKET(client, master); // Bloc logique : recalcul des pods visibles pour le maître.
     }
 
+    /**
+     * Engage une incarnation temporaire du maître sur le héros actif.
+     * <p>
+     * Exemple : lors du début d'un tour, {@code engageTemporaryIncarnation(master, hero)} force le client à incarner le héros.<br>
+     * Erreur fréquente : rappeler cette méthode alors que le héros est déjà incarné, ce qui écraserait la sauvegarde du maître d'origine.<br>
+     * Effet de bord : met à jour {@link GameClient#switchActivePlayer(Player)} et stocke l'ancre de restauration dans {@link #sessionIncarnationSnapshots}.
+     * </p>
+     *
+     * @param master maître dont la session réseau doit être déplacée.
+     * @param hero   héros qui devient temporairement incarné.
+     */
+    private void engageTemporaryIncarnation(Player master, Player hero) {
+        if (master == null || hero == null) { // Bloc logique : aucune incarnation possible sans paire valide.
+            return;
+        }
+        GameClient client = master.getGameClient();
+        if (client == null) { // Bloc logique : abandonne si la session réseau n'est plus active.
+            return;
+        }
+        Player currentlyIncarnated = client.getPlayer();
+        if (currentlyIncarnated != null && currentlyIncarnated.getId() == hero.getId()) { // Bloc logique : évite de dupliquer l'incarnation si le héros est déjà actif.
+            return;
+        }
+        if (!sessionIncarnationSnapshots.containsKey(master.getId())) { // Bloc logique : mémorise le maître initial seulement une fois par tour.
+            sessionIncarnationSnapshots.put(master.getId(), currentlyIncarnated != null ? currentlyIncarnated : master); // Effet de bord : stocke le personnage de référence pour la restauration.
+        }
+        client.switchActivePlayer(hero); // Effet de bord : bascule l'incarnation côté client sans rompre la session réseau.
+    }
+
+    /**
+     * Restaure l'incarnation principale d'un maître après un tour de héros.
+     * <p>
+     * Exemple : à la fin du tour, {@code restorePrimaryIncarnation(master)} redonne le contrôle au personnage original.<br>
+     * Cas limite : si aucune incarnation n'est mémorisée (déconnexion par exemple), la méthode retombe sur {@code master}.<br>
+     * Effet de bord : appelle {@link GameClient#switchActivePlayer(Player)} pour réaligner la session et nettoie la sauvegarde.
+     * </p>
+     *
+     * @param master maître à restaurer.
+     */
+    private void restorePrimaryIncarnation(Player master) {
+        if (master == null) { // Bloc logique : rien à restaurer sans maître explicite.
+            return;
+        }
+        GameClient client = master.getGameClient();
+        if (client == null) { // Bloc logique : purge simplement la sauvegarde si le réseau est coupé.
+            sessionIncarnationSnapshots.remove(master.getId());
+            return;
+        }
+        Player snapshot = sessionIncarnationSnapshots.remove(master.getId()); // Bloc logique : récupère le personnage incarné avant le tour du héros.
+        Player target = snapshot != null ? snapshot : master; // Bloc logique : retombe sur le maître si aucune sauvegarde n'est disponible.
+        Player currentlyIncarnated = client.getPlayer();
+        if (currentlyIncarnated != null && currentlyIncarnated.getId() == target.getId()) { // Bloc logique : évite un switch inutile lorsque l'incarnation est déjà correcte.
+            return;
+        }
+        client.switchActivePlayer(target); // Effet de bord : réaligne immédiatement la session sur le personnage maître ou sauvegardé.
+    }
+
     /** Notes pédagogiques
      * - {@link #prepareTurnControl(Fight, Fighter)} renvoie {@code false} pour inviter le moteur à passer le tour si le maître est indisponible.
      * - {@link #finalizeTurnControl(Fighter)} délègue à {@link #releaseControlFor(Player, Player)} la restauration complète de l'UI.
      * - {@link #resolveControlledActor(Player)} permet aux couches réseau de router les commandes sur le bon combattant.
      * - {@link #transferManualControl(Player, Player)} maintient le même héros actif après un {@code switchMaster}.
+     * - {@link #engageTemporaryIncarnation(Player, Player)} force le client à incarner un héros pendant son tour.
+     * - {@link #restorePrimaryIncarnation(Player)} garantit le retour automatique sur le maître en fin de tour ou lors d'un nettoyage.
      * - {@link #clearManualControl(Player)} reste utile pour purger tout résidu lors de l'ajout ou du retrait d'un héros.
      */
 }
