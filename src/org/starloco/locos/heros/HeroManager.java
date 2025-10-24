@@ -489,24 +489,46 @@ public final class HeroManager {
         reloadSavedPosition(hero); // Fallback : tente une reconstruction à partir des données persistées en base.
     }
 
+    /**
+     * Recalcule la position logique d'un héros à partir des données persistées.
+     * <p>
+     * Exemple : après un redémarrage serveur, {@code reloadSavedPosition(hero)} replace le personnage sur la dernière carte
+     * enregistrée en base au lieu de le renvoyer à son zaap.<br>
+     * Cas d'erreur fréquent : un enregistrement partiel (carte sans cellule) déclenche le repli sur le point de sauvegarde.
+     * </p>
+     *
+     * @param hero personnage ciblé pour la restauration.
+     */
     private void reloadSavedPosition(Player hero) {
-        if (hero == null) { // Bloc logique : protège contre un appel avec référence nulle.
+        if (hero == null) { // Sécurise l'appel pour éviter toute NullPointerException inutile.
             return;
         }
-        int[] saved = hero.getSavePositionIdentifiers();
-        if (saved == null) { // Bloc logique : aucune position persistée à réappliquer.
+
+        GameMap persistedMap = hero.getCurMap(); // Carte issue de la dernière sauvegarde complète (map + cell).
+        GameCase persistedCell = hero.getCurCell(); // Cellule correspondante chargée depuis la base de données.
+
+        if (persistedMap != null && persistedCell != null) { // Bloc logique : données complètes disponibles, inutile de chercher ailleurs.
+            hero.setVirtualPosition(persistedMap, persistedCell); // Applique directement la paire carte/cellule persistée.
+            return; // Étape finale : rien d'autre à faire si la position était déjà valide.
+        }
+
+        int[] saved = hero.getSavePositionIdentifiers(); // Bloc logique : repli sur le point de sauvegarde officiel (zaap) uniquement si nécessaire.
+        if (saved == null) { // Protection supplémentaire : aucun repli possible sans identifiants valides.
             return;
         }
-        GameMap map = World.world.getMap((short) saved[0]);
-        if (map == null) { // Bloc logique : évite les cartes supprimées ou inaccessibles.
+
+        GameMap map = World.world.getMap((short) saved[0]); // Carte associée au zaap : utile lors d'un défaut de données persistées.
+        if (map == null) { // Bloc logique : abandonne si la carte de secours est devenue inaccessible.
             return;
         }
-        GameCase cell = map.getCase(saved[1]);
-        if (cell == null) { // Bloc logique : on prévoit un filet de sécurité si la cellule a été modifiée depuis l'enregistrement.
-            int fallbackCell = map.getRandomFreeCellId();
-            cell = fallbackCell >= 0 ? map.getCase(fallbackCell) : null;
+
+        GameCase cell = map.getCase(saved[1]); // Cellule attendue du zaap, généralement libre.
+        if (cell == null) { // Bloc logique : filets de sécurité si la cellule d'origine n'existe plus.
+            int fallbackCell = map.getRandomFreeCellId(); // Recherche une cellule libre pour éviter un crash au chargement.
+            cell = fallbackCell >= 0 ? map.getCase(fallbackCell) : null; // Convertit l'identifiant en cellule exploitable.
         }
-        hero.setVirtualPosition(map, cell); // Applique la position logique sans téléportation réseau.
+
+        hero.setVirtualPosition(map, cell); // Applique finalement le repli vers le point de sauvegarde.
     }
 
     private void attachToParty(Player master, Player hero) {
