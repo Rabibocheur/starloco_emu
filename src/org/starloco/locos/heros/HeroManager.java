@@ -6,6 +6,8 @@ import org.starloco.locos.client.Player;
 import org.starloco.locos.client.other.Party;
 import org.starloco.locos.database.Database;
 import org.starloco.locos.common.SocketManager;
+import org.starloco.locos.fight.Fight;
+import org.starloco.locos.fight.Fighter;
 import org.starloco.locos.game.GameClient;
 import org.starloco.locos.game.world.World;
 
@@ -27,6 +29,8 @@ public final class HeroManager {
     private final Map<Integer, HeroGroup> groups = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> heroToMaster = new ConcurrentHashMap<>();
     private final Map<Integer, HeroSnapshot> heroSnapshots = new ConcurrentHashMap<>(); // Mémorise la position réelle de chaque héros pour les futures restaurations.
+    private final Map<Integer, FightControlContext> fightControlByMaster = new ConcurrentHashMap<>(); // Association maître -> contexte de switch en combat.
+    private final Map<Integer, FightControlContext> fightControlByHero = new ConcurrentHashMap<>(); // Association héros -> contexte de switch en combat pour une résolution rapide.
     private HeroManager() {
     }
 
@@ -100,6 +104,7 @@ public final class HeroManager {
         if (hero == null) {
             return HeroOperationResult.error("Ce héros n'est pas actif.");
         }
+        endHeroFightControl(hero); // Bloc logique : annule immédiatement un éventuel switch en combat ciblant ce héros.
         heroToMaster.remove(hero.getId());
         Party party = hero.getParty();
         if (party != null) {
@@ -229,6 +234,7 @@ public final class HeroManager {
         if (master == null) {
             return;
         }
+        ensureMasterIsActive(master); // Bloc logique : garantit que le maître reprend la main avant le nettoyage.
         HeroGroup group = groups.remove(master.getId());
         if (group == null) {
             return;
@@ -260,6 +266,7 @@ public final class HeroManager {
         if (player == null) { // Bloc logique : aucune opération n'est réalisée sans cible valide.
             return;
         }
+        endHeroFightControl(player); // Bloc logique : stoppe un éventuel switch actif avant de modifier les structures.
         Integer masterId = heroToMaster.remove(player.getId());
         if (masterId != null) { // Bloc logique : uniquement si le joueur était bien enregistré comme héros.
             HeroGroup group = groups.get(masterId);
@@ -300,6 +307,52 @@ public final class HeroManager {
      */
     public boolean isHero(Player player) {
         return player != null && heroToMaster.containsKey(player.getId());
+    }
+
+    /**
+     * Prépare le bon contrôleur en début de tour pour éviter toute confusion côté client.<br>
+     * Exemple : {@code onFighterTurnStart(fighter)} déclenche l'incarnation auto si {@code fighter} est un héros.<br>
+     * Invariant : la session client n'est jamais détachée ; seul le personnage actif change temporairement.<br>
+     * Effets de bord : met à jour les barres de sorts et de caractéristiques pour le personnage incarné.
+     *
+     * @param fighter combattant dont le tour débute.
+     */
+    public synchronized void onFighterTurnStart(Fighter fighter) {
+        if (fighter == null) { // Bloc logique : aucun combattant fourni, aucune action nécessaire.
+            return;
+        }
+        Player actor = fighter.getPersonnage(); // Identifie l'éventuel joueur derrière le combattant.
+        if (actor == null) { // Bloc logique : invocations ou entités neutres ignorent ce flux.
+            return;
+        }
+        if (isHero(actor)) { // Bloc logique : l'acteur est un héros virtuel.
+            beginHeroFightControl(actor); // Active le switch côté client pour permettre le contrôle manuel.
+        } else {
+            ensureMasterIsActive(actor); // Sécurise le retour sur le maître si un héros contrôlait précédemment la session.
+        }
+    }
+
+    /**
+     * Termine proprement le switch d'incarnation lorsqu'un tour s'achève.<br>
+     * Exemple : {@code onFighterTurnEnd(fighter)} rend le contrôle au maître si {@code fighter} était un héros.<br>
+     * Invariant : le maître récupère toujours sa session client après l'appel, même en cas d'abandon du combat.<br>
+     * Effets de bord : rafraîchit les informations de combat visibles pour le joueur actif.
+     *
+     * @param fighter combattant dont le tour se termine.
+     */
+    public synchronized void onFighterTurnEnd(Fighter fighter) {
+        if (fighter == null) { // Bloc logique : rien à faire si aucun combattant.
+            return;
+        }
+        Player actor = fighter.getPersonnage(); // Récupère le joueur incarnant potentiellement ce combattant.
+        if (actor == null) { // Bloc logique : les entités non joueurs n'impliquent pas de switch.
+            return;
+        }
+        if (isHero(actor)) { // Bloc logique : fin de tour pour un héros.
+            endHeroFightControl(actor); // Rend immédiatement le contrôle au maître légitime.
+        } else {
+            ensureMasterIsActive(actor); // Vérifie qu'aucun résidu de switch précédent ne subsiste côté maître.
+        }
     }
 
     /**
@@ -464,6 +517,110 @@ public final class HeroManager {
             builder.append("Aucun");
         }
         return builder.toString();
+    }
+
+    private void beginHeroFightControl(Player hero) {
+        if (hero == null) { // Bloc logique : aucun héros fourni, aucune action possible.
+            return;
+        }
+        Integer masterId = heroToMaster.get(hero.getId()); // Bloc logique : identifie le maître lié.
+        if (masterId == null) { // Bloc logique : héros orphelin, on abandonne le switch.
+            return;
+        }
+        Player master = World.world.getPlayer(masterId); // Bloc logique : récupère le maître connecté.
+        if (master == null) { // Bloc logique : maître déconnecté, le combat gère déjà la sortie.
+            return;
+        }
+        GameClient client = master.getGameClient(); // Bloc logique : session réseau partagée.
+        if (client == null) { // Bloc logique : sans client actif, aucun switch ne peut être déclenché.
+            return;
+        }
+        FightControlContext existing = fightControlByMaster.get(masterId); // Bloc logique : vérifie un éventuel switch en cours.
+        if (existing != null) { // Bloc logique : un autre héros était peut-être déjà incarné.
+            if (existing.hero.getId() == hero.getId()) { // Bloc logique : même héros qu'au tour précédent.
+                sendFightRefreshPackets(hero); // Effet : réémet les informations essentielles pour éviter toute désynchronisation.
+                return;
+            }
+            endHeroFightControl(existing.hero); // Effet : clôt proprement l'ancien switch avant de lancer le nouveau.
+        }
+        Player previousClientPlayer = client.getPlayer(); // Bloc logique : mémorise le personnage auparavant contrôlé.
+        Player previousAccountPlayer = master.getAccount() == null ? null : master.getAccount().getCurrentPlayer(); // Bloc logique : capture l'état du compte.
+        FightControlContext context = new FightControlContext(master, hero, previousClientPlayer, previousAccountPlayer, hero.isEsclave()); // Bloc logique : stocke toutes les informations utiles pour la restauration.
+        fightControlByMaster.put(masterId, context); // Bloc logique : référence rapide par maître.
+        fightControlByHero.put(hero.getId(), context); // Bloc logique : accès direct par héros.
+        hero.setEsclave(false); // Bloc logique : autorise toutes les interactions pendant la durée du tour.
+        client.switchActivePlayer(hero); // Effet : le client redirige les actions vers le héros.
+        if (master.getAccount() != null) { // Bloc logique : double sécurité pour les vérifications côté compte.
+            master.getAccount().setCurrentPlayer(hero); // Effet : évite que des systèmes annexes ne continuent d'utiliser le maître.
+        }
+        sendFightRefreshPackets(hero); // Effet : met à jour sorts, caractéristiques et timeline pour le personnage contrôlé.
+    }
+
+    private void ensureMasterIsActive(Player master) {
+        if (master == null) { // Bloc logique : sans maître, la vérification est inutile.
+            return;
+        }
+        FightControlContext context = fightControlByMaster.remove(master.getId()); // Bloc logique : récupère un éventuel switch actif.
+        if (context == null) { // Bloc logique : aucun héros ne contrôle actuellement la session.
+            GameClient client = master.getGameClient(); // Bloc logique : session actuelle.
+            if (client != null && client.getPlayer() != master) { // Bloc logique : corrige les cas limites où le client pointe encore sur un héros.
+                client.switchActivePlayer(master); // Effet : restaure immédiatement le maître comme personnage actif.
+                if (master.getAccount() != null) { // Bloc logique : ajuste l'état du compte si nécessaire.
+                    master.getAccount().setCurrentPlayer(master); // Effet : harmonise les références maître/compte.
+                }
+                sendFightRefreshPackets(master); // Effet : garantit l'affichage correct des barres pour le maître.
+            }
+            return;
+        }
+        fightControlByHero.remove(context.hero.getId()); // Bloc logique : supprime la référence inverse pour éviter les fuites.
+        finalizeFightControlSwitch(context, master); // Effet : applique toutes les restaurations mémorisées.
+    }
+
+    private void endHeroFightControl(Player hero) {
+        if (hero == null) { // Bloc logique : sans héros, aucun switch à terminer.
+            return;
+        }
+        FightControlContext context = fightControlByHero.remove(hero.getId()); // Bloc logique : récupère le contexte ciblant ce héros.
+        if (context == null) { // Bloc logique : le héros n'était plus contrôlé.
+            return;
+        }
+        fightControlByMaster.remove(context.master.getId()); // Bloc logique : supprime également la référence côté maître.
+        finalizeFightControlSwitch(context, context.master); // Effet : replace le maître comme personnage contrôlé.
+    }
+
+    private void finalizeFightControlSwitch(FightControlContext context, Player fallback) {
+        if (context == null) { // Bloc logique : aucune donnée de restauration, on quitte.
+            return;
+        }
+        Player master = context.master; // Bloc logique : maître initialement contrôleur.
+        Player hero = context.hero; // Bloc logique : héros précédemment incarné.
+        GameClient client = master == null ? null : master.getGameClient(); // Bloc logique : session potentielle.
+        Player clientTarget = context.previousClientPlayer != null ? context.previousClientPlayer : fallback; // Bloc logique : personnage à réassigner côté client.
+        Player accountTarget = context.previousAccountPlayer != null ? context.previousAccountPlayer : fallback; // Bloc logique : personnage à déclarer actif pour le compte.
+        if (client != null) { // Bloc logique : s'assure que la session existe avant modification.
+            client.switchActivePlayer(clientTarget != null ? clientTarget : master); // Effet : repositionne la référence côté client.
+        }
+        if (master != null && master.getAccount() != null) { // Bloc logique : protège contre un maître momentanément déchargé.
+            master.getAccount().setCurrentPlayer(accountTarget != null ? accountTarget : master); // Effet : rétablit l'état courant sur le compte.
+        }
+        if (hero != null) { // Bloc logique : héro peut être nul si retiré pendant le processus.
+            hero.setEsclave(context.heroWasSlave); // Effet : retrouve son état esclave d'origine pour retourner en mode virtuel.
+        }
+        Player refresh = clientTarget != null ? clientTarget : master; // Bloc logique : choisit la meilleure cible pour rafraîchir l'affichage.
+        sendFightRefreshPackets(refresh); // Effet : synchronise l'interface avec le personnage de référence.
+    }
+
+    private void sendFightRefreshPackets(Player target) {
+        if (target == null) { // Bloc logique : aucune cible de rafraîchissement disponible.
+            return;
+        }
+        SocketManager.GAME_SEND_STATS_PACKET(target); // Effet : met à jour PA/PM, vitalité et états du personnage contrôlé.
+        SocketManager.GAME_SEND_GS_PACKET(target); // Effet : rafraîchit la barre de sorts selon le personnage incarné.
+        Fight fight = target.getFight(); // Bloc logique : récupère le combat courant si disponible.
+        if (fight != null) { // Bloc logique : uniquement en combat.
+            SocketManager.GAME_SEND_GTM_PACKET(target, fight); // Effet : actualise la timeline et les caractéristiques du combat.
+            SocketManager.GAME_SEND_GTL_PACKET(target, fight); // Effet : synchronise la liste des combattants actifs.
+        }
     }
 
     private void rememberHeroPosition(Player hero) {
@@ -695,13 +852,35 @@ public final class HeroManager {
         }
     }
 
+    /**
+     * Conserve tout le contexte nécessaire pour restituer le contrôle au maître après un tour de héros.<br>
+     * Exemple : {@code new FightControlContext(master, hero, master, master, true)} lorsque le client contrôlait déjà le maître.<br>
+     * Invariant : les références sont immuables afin d'être réutilisées sans synchronisation supplémentaire.<br>
+     * Effet de bord : aucun, il s'agit d'un simple conteneur de données.
+     */
+    private static final class FightControlContext {
+        private final Player master; // Référence au maître initial.
+        private final Player hero; // Référence au héros incarné.
+        private final Player previousClientPlayer; // Joueur précédemment contrôlé côté GameClient.
+        private final Player previousAccountPlayer; // Joueur enregistré comme courant sur le compte.
+        private final boolean heroWasSlave; // Mémorise si le héros était esclave avant le switch.
+
+        private FightControlContext(Player master, Player hero, Player previousClientPlayer, Player previousAccountPlayer, boolean heroWasSlave) {
+            this.master = master; // Bloc logique : sauvegarde du maître.
+            this.hero = hero; // Bloc logique : sauvegarde du héros.
+            this.previousClientPlayer = previousClientPlayer; // Bloc logique : snapshot du GameClient.
+            this.previousAccountPlayer = previousAccountPlayer; // Bloc logique : snapshot du compte.
+            this.heroWasSlave = heroWasSlave; // Bloc logique : état esclave d'origine.
+        }
+    }
+
     private static final class HeroGroup {
         private final Map<Integer, Player> heroes = new LinkedHashMap<>();
     }
 
     /** Notes pédagogiques
      * - Utiliser {@link #getActiveHeroes(Player)} avant un combat pour récupérer l'ordre d'apparition des héros.
-     * - {@link #restoreGroupAfterFight(Player)} garantit que les héros restent invisibles sur la carte principale.
+     * - {@link #onFighterTurnStart(Fighter)} et {@link #onFighterTurnEnd(Fighter)} gèrent le switch manuel sans ouvrir de nouvelle session.
      * - {@link #findMaster(Player)} permet de sécuriser les accès en resynchronisant un héros avec son maître après un combat.
      * - {@link #ensureStandalone(Player)} est à appeler juste avant {@link Player#OnJoinGame()} pour éviter les cartes nulles.
      * - Les instantanés ({@link HeroSnapshot}) n'occupent qu'un stockage léger et sont purgés dès qu'ils sont réappliqués.
