@@ -1259,7 +1259,10 @@ public class Player {
     }
 
     public void setCurCell(GameCase cell) {
-        curCell = cell;
+        this.curCell = cell;
+        if (this.isEsclave()) {
+            return;
+        }
         HeroManager.getInstance().onPlayerCellUpdated(this, cell);
     }
 
@@ -1296,6 +1299,9 @@ public class Player {
 
     public void setCurMap(GameMap curMap) {
         this.curMap = curMap;
+        if (this.isEsclave()) {
+            return;
+        }
         HeroManager.getInstance().onPlayerMapUpdated(this, curMap);
     }
 
@@ -1308,6 +1314,18 @@ public class Player {
     public void setVirtualPosition(GameMap map, GameCase cell) {
         this.curMap = map;
         this.curCell = cell;
+    }
+
+    /**
+     * Met à jour la position logique à partir des identifiants de carte et de cellule.
+     *
+     * @param mapId  identifiant de la carte cible.
+     * @param cellId identifiant de la cellule cible.
+     */
+    public void setVirtualPosition(short mapId, int cellId) {
+        GameMap map = World.world.getMap(mapId);
+        GameCase cell = map == null ? null : map.getCase(cellId);
+        setVirtualPosition(map, cell);
     }
 
     public boolean isAway() {
@@ -3057,6 +3075,12 @@ public class Player {
     }
 
     public void teleport(short newMapID, int newCellID) {
+        if (this.isEsclave()) {
+            GameMap targetMap = World.world.getMap(newMapID);
+            GameCase targetCell = targetMap == null ? null : targetMap.getCase(newCellID);
+            setVirtualPosition(targetMap, targetCell);
+            return;
+        }
         if (this.getFight() != null) return;
         GameClient client = this.getGameClient();
         if (client == null)
@@ -3189,6 +3213,10 @@ public class Player {
     }
 
     public void teleport(GameMap map, int cell) {
+        if (this.isEsclave()) {
+            setVirtualPosition(map, map == null ? null : map.getCase(cell));
+            return;
+        }
         if (this.getFight() != null) return;
         GameClient PW = null;
         if (account.getGameClient() != null) {

@@ -727,6 +727,9 @@ public class GameMap {
     }
 
     public void addPlayer(Player perso) {
+        if (perso == null || perso.isEsclave()) {
+            return;
+        }
         SocketManager.GAME_SEND_ADD_PLAYER_TO_MAP(this, perso);
         perso.getCurCell().addPlayer(perso);
         if (perso.getEnergy() > 0) {
@@ -747,10 +750,14 @@ public class GameMap {
     }
 
     public ArrayList<Player> getPlayers() {
-        ArrayList<Player> player = new ArrayList<>();
-        for (GameCase c : cases)
-            player.addAll(c.getPlayers().stream().collect(Collectors.toList()));
-        return player;
+        ArrayList<Player> players = new ArrayList<>();
+        for (GameCase c : cases) {
+            c.getPlayers().stream()
+                    .filter(Objects::nonNull)
+                    .filter(player -> !player.isEsclave())
+                    .forEach(players::add);
+        }
+        return players;
     }
 
     public void sendFloorItems(Player perso) {

@@ -349,6 +349,9 @@ public class SocketManager {
     }
 
     public static void GAME_SEND_ADD_PLAYER_TO_MAP(GameMap map, Player perso) {
+        if (perso == null || perso.isEsclave()) {
+            return;
+        }
         String packet = "GM|+" + perso.parseToGM();
         for (Player z : map.getPlayers()) {
             if (perso.get_size() > 0)
