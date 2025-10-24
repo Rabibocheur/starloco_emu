@@ -69,6 +69,7 @@ public final class HeroManager {
             return HeroOperationResult.error("Vous avez déjà trois héros actifs.");
         }
         detachHero(hero);
+        initializeHeroPosition(master, hero);
         group.heroes.put(hero.getId(), hero);
         heroToMaster.put(hero.getId(), master.getId());
         hero.setEsclave(true);
@@ -306,6 +307,15 @@ public final class HeroManager {
         }
         hero.setCurCell(null);
         hero.setCurMap(null);
+    }
+
+    /**
+     * Aligne instantanément la position du héros sur celle du maître.
+     */
+    private void initializeHeroPosition(Player master, Player hero) {
+        hero.setCurMap(master.getCurMap());
+        hero.setCurCell(master.getCurCell());
+        hero.set_orientation(master.get_orientation());
     }
 
     private void updatePositionsAfterJoin(Player master) {
