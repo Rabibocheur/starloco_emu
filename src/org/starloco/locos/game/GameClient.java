@@ -152,6 +152,29 @@ public class GameClient {
     }
 
     /**
+     * Indique si la session est actuellement engagée dans un combat actif.
+     * <p>
+     * Exemple : {@code if (client.isFighting()) return;} empêche l'envoi d'un GDM pendant une incarnation de héros.<br>
+     * Erreur fréquente : ignorer cette vérification provoque un rechargement complet de la map côté client.<br>
+     * Effet de bord : aucun, la méthode observe seulement l'état sans modifier la session.<br>
+     * Invariant : renvoie toujours {@code false} si aucun joueur n'est attaché ou si la timeline combat n'a pas démarré.
+     * </p>
+     *
+     * @return {@code true} si le joueur actif est en combat et que le tour est lancé, {@code false} sinon.
+     */
+    public boolean isFighting() {
+        Player sessionPlayer = this.player; // Bloc logique : capture le joueur incarné par la session réseau.
+        if (sessionPlayer == null) { // Bloc logique : conclut immédiatement si la session n'a plus de personnage.
+            return false;
+        }
+        Fight fight = sessionPlayer.getFight(); // Bloc logique : récupère le combat éventuel associé au joueur.
+        if (fight == null) { // Bloc logique : protège des NullPointerException lorsque le joueur n'est pas en combat.
+            return false;
+        }
+        return fight.isBegin(); // Bloc logique : ne valide que les combats effectivement démarrés.
+    }
+
+    /**
      * Sélectionne le personnage dont les actions de combat doivent être interprétées.
      * <p>
      * Exemple : lors d'un tour de héros, {@code resolveFightActor()} renvoie ce héros au lieu du maître.<br>

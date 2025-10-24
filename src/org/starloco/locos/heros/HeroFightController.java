@@ -379,7 +379,7 @@ final class HeroFightController {
      * Exemple : {@code sendIncarnationHandshake(client, hero, fighter)} juste après {@link #engageTemporaryIncarnation(Player, Player)}
      * garantit que l'UI combat affiche les PA/PM du héros actif sans recharger la map.<br>
      * Erreur fréquente : appeler cette méthode avec un client déconnecté, rien n'est envoyé et le switch paraît figé côté joueur.<br>
-     * Effets de bord : en combat, un ASK minimal suivi de Stats, Pods, Spells puis GTS est envoyé ; hors combat, le paquet ASK complet est conservé.<br>
+     * Effets de bord : en combat, un {@code ASK_COMBAT} minimal suivi de Stats, Pods, Spells puis GTS est envoyé ; hors combat, le paquet ASK complet est conservé.<br>
      * Invariant : ne fait rien si la session ou la cible est absente, ce qui protège des NullPointerException pour les débutants.<br>
      * </p>
      *
@@ -398,7 +398,7 @@ final class HeroFightController {
             if (resolvedFighter == null && targetFight != null) { // Bloc logique : retombe sur le combattant lié au personnage si absent.
                 resolvedFighter = targetFight.getFighterByPerso(target); // Effet de bord : récupère l'identifiant pour préparer GTS.
             }
-            SocketManager.GAME_SEND_MINI_ASK_PACKET(client, target); // Effet de bord : signale l'incarnation sans déclencher de GDM.
+            SocketManager.GAME_SEND_MINI_ASK_PACKET(client, target, resolvedFighter); // Effet de bord : émet ASK_COMBAT ciblant le combattant actif.
             SocketManager.GAME_SEND_STATS_PACKET(client, target); // Bloc logique : actualise PV/PA/PM visibles sans toucher à la map.
             SocketManager.GAME_SEND_Ow_PACKET(client, target); // Bloc logique : rafraîchit les pods pour éviter un affichage obsolète.
             SocketManager.GAME_SEND_SPELL_LIST(client, target); // Bloc logique : synchronise la barre de sorts avec le héros en cours.
