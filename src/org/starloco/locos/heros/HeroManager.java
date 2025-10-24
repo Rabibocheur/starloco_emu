@@ -212,7 +212,12 @@ public final class HeroManager {
                 if (hero == null) {
                     continue;
                 }
-                hero.setVirtualPosition(player.getCurMap(), newCell);
+                GameMap masterMap = player.getCurMap();
+                if (masterMap != null && newCell != null) {
+                    hero.setVirtualPosition(masterMap.getId(), newCell.getId());
+                } else {
+                    hero.setVirtualPosition(masterMap, newCell);
+                }
             }
         } finally {
             positionUpdate.set(Boolean.FALSE);
@@ -293,7 +298,13 @@ public final class HeroManager {
      * Aligne instantanément la position du héros sur celle du maître.
      */
     private void initializeHeroPosition(Player master, Player hero) {
-        hero.setVirtualPosition(master.getCurMap(), master.getCurCell());
+        GameMap map = master.getCurMap();
+        GameCase cell = master.getCurCell();
+        if (map != null && cell != null) {
+            hero.setVirtualPosition(map.getId(), cell.getId());
+        } else {
+            hero.setVirtualPosition(map, cell);
+        }
         hero.set_orientation(master.get_orientation());
     }
 
