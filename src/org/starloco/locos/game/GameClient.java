@@ -34,6 +34,7 @@ import org.starloco.locos.game.action.ExchangeAction;
 import org.starloco.locos.game.action.GameAction;
 import org.starloco.locos.game.world.World;
 import org.starloco.locos.game.world.World.Couple;
+import org.starloco.locos.heros.HeroFightController;
 import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.hdv.Hdv;
 import org.starloco.locos.hdv.HdvEntry;
@@ -4308,8 +4309,10 @@ public class GameClient {
                 readyFight(packet);
                 break;
             case 't':
-                if (this.player.getFight() != null)
-                    this.player.getFight().playerPass(this.player);
+                Player actor = resolveActiveCombatPlayer(); // Bloc logique : récupère l'entité actuellement contrôlée.
+                Fight fight = actor.getFight(); // Bloc logique : combat associé au maître ou au héros.
+                if (fight != null)
+                    fight.playerPass(actor);
                 break;
                 // Pour éviter map noir client > 1.34
             default:
@@ -4572,10 +4575,12 @@ public class GameClient {
             this.player.setSitted(false);
             this.player.setAway(true);
         } else {
-            final Fighter fighter = this.player.getFight().getFighterByPerso(this.player);
+            final Player actor = resolveActiveCombatPlayer(); // Bloc logique : identifie le combattant effectif pour ce déplacement.
+            final Fight fight = actor.getFight(); // Bloc logique : récupère le combat partagé par le maître et ses héros.
+            final Fighter fighter = fight != null ? fight.getFighterByPerso(actor) : null; // Bloc logique : sélectionne le combattant associé.
             if (fighter != null) {
                 GA.args = path;
-                this.player.getFight().cast(this.player.getFight().getFighterByPerso(this.player), () -> this.player.getFight().onFighterDeplace(fighter, GA));
+                fight.cast(fighter, () -> fight.onFighterDeplace(fighter, GA)); // Bloc logique : exécute le déplacement côté serveur.
             }
         }
     }
@@ -4590,6 +4595,24 @@ public class GameClient {
         //this.player.addNewQuest(Integer.parseInt(packet.substring(5)));
     }
 
+    /**
+     * Identifie le personnage dont les actions doivent être interprétées côté serveur.<br>
+     * <p>
+     * Exemple : lors d'un tour de héros, {@code resolveActiveCombatPlayer()} retourne le héros plutôt que le maître.<br>
+     * Invariant : renvoie toujours un joueur non null pour garantir la continuité du traitement réseau.<br>
+     * Effet de bord : aucun, la méthode délègue simplement au {@link HeroFightController}.
+     * </p>
+     *
+     * @return joueur à utiliser pour les actions de combat.
+     */
+    private Player resolveActiveCombatPlayer() {
+        Player actor = HeroFightController.getInstance().resolveActiveActor(this.player); // Bloc logique : récupère l'acteur effectif.
+        if (actor == null) { // Bloc logique : repli de sécurité si aucun contexte n'est actif.
+            return this.player;
+        }
+        return actor;
+    }
+
     private void gameTryCastSpell(String packet) {
         try {
             String[] split = packet.split(";");
@@ -4597,15 +4620,16 @@ public class GameClient {
             if(packet.contains("undefined") || split == null || split.length != 2)
                 return;
 
-            final int id = Integer.parseInt(split[0].substring(5)), cellId = Integer.parseInt(split[1]);
-            final Fight fight = this.player.getFight();
+            final int id = Integer.parseInt(split[0].substring(5)), cellId = Integer.parseInt(split[1]); // Bloc logique : extraction des paramètres du sort.
+            final Player actor = resolveActiveCombatPlayer(); // Bloc logique : sélectionne maître ou héros selon le tour courant.
+            final Fight fight = actor.getFight();
 
             if (fight != null) {
-                Spell.SortStats SS = this.player.getSortStatBySortIfHas(id);
+                Spell.SortStats SS = actor.getSortStatBySortIfHas(id); // Bloc logique : récupère le sort depuis le bon personnage.
 
                 if (SS != null)
-                    if(!this.player.getFight().isCurAction() && !this.player.getFight().isTraped())
-                        this.player.getFight().cast(this.player.getFight().getFighterByPerso(this.player), () -> this.player.getFight().tryCastSpell(this.player.getFight().getFighterByPerso(this.player), SS, cellId));
+                    if(!fight.isCurAction() && !fight.isTraped()) // Bloc logique : exécute la tentative uniquement si le combat l'autorise.
+                        fight.cast(fight.getFighterByPerso(actor), () -> fight.tryCastSpell(fight.getFighterByPerso(actor), SS, cellId));
             }
         } catch (NumberFormatException e) {
             System.err.println(packet + "\n" + e);
@@ -4615,9 +4639,11 @@ public class GameClient {
     private void gameTryCac(String packet) {
         try {
             if(packet.contains("undefined")) return;
-            final int cell = Integer.parseInt(packet.substring(5));
-            if (this.player.getFight() != null && !this.player.getFight().isCurAction() && !this.player.getFight().isTraped())
-                this.player.getFight().cast(this.player.getFight().getFighterByPerso(this.player), () -> this.player.getFight().tryCaC(this.player, cell));
+            final int cell = Integer.parseInt(packet.substring(5)); // Bloc logique : récupère la cellule ciblée.
+            final Player actor = resolveActiveCombatPlayer(); // Bloc logique : détermine qui effectue réellement l'attaque.
+            final Fight fight = actor.getFight();
+            if (fight != null && !fight.isCurAction() && !fight.isTraped()) // Bloc logique : valide la disponibilité de l'action.
+                fight.cast(fight.getFighterByPerso(actor), () -> fight.tryCaC(actor, cell));
         } catch (Exception e) {
             e.printStackTrace();
         }
