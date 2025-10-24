@@ -261,9 +261,9 @@ public final class HeroManager {
     /**
      * Prépare la prise de contrôle d'un combattant juste avant le début d'un tour.
      * <p>
-     * Exemple : {@code prepareTurnControl(fight, fighter)} déclenche l'envoi des statistiques du héros au maître.<br>
+     * Exemple : {@code prepareTurnControl(fight, fighter)} déclenche l'envoi des statistiques et paquets GIC/GAS du héros au maître.<br>
      * Invariant : si le combattant n'est pas un héros, aucun changement de contrôle n'est effectué.<br>
-     * Effet de bord : en cas d'échec (maître absent), le tour devra être passé côté combat.
+     * Effet de bord : en cas d'échec (maître absent), le tour devra être passé côté combat et aucun identifiant de contrôle n'est conservé.
      * </p>
      *
      * @param fight   combat en cours.
@@ -288,10 +288,18 @@ public final class HeroManager {
         }
         GameClient client = master.getGameClient();
         if (client == null || master.getFight() != fight) { // Bloc logique : maîtrise impossible si le client est absent ou sur un autre combat.
+            if (client != null) { // Bloc logique : réinitialise la session si le client répond encore.
+                client.resetControlledFighter(); // Bloc logique : évite de conserver un identifiant obsolète côté réseau.
+            }
             activeHeroControl.remove(master.getId()); // Supprime toute redirection résiduelle avant de forcer le passage de tour.
             return false;
         }
         activeHeroControl.put(master.getId(), actor);
+        client.setControlledFighterId(fighter.getId()); // Bloc logique : mémorise l'identifiant du combattant contrôlé côté session réseau.
+        SocketManager.GAME_SEND_GIC_PACKET(master, fighter); // Bloc logique : force le focus de l'interface combat sur le héros ciblé.
+        SocketManager.GAME_SEND_GAS_PACKET(master, fighter.getId()); // Bloc logique : actualise l'ordre de jeu client pour ce combattant.
+        SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline côté maître afin d'afficher les PA/PM corrects.
+        SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Bloc logique : synchronise les informations de points de vie et positions du héros actif.
         SocketManager.GAME_SEND_STATS_PACKET(client, actor); // Met à jour la fiche de caractéristiques côté maître.
         SocketManager.GAME_SEND_SPELL_LIST(client, actor); // Synchronise la barre de sorts avec ceux du héros actif.
         SocketManager.GAME_SEND_Ow_PACKET(client, actor); // Actualise les points de pods pour éviter des incohérences d'inventaire.
@@ -303,7 +311,7 @@ public final class HeroManager {
      * <p>
      * Exemple : {@code finalizeTurnControl(fighter)} renvoie instantanément le contrôle sur le maître propriétaire.<br>
      * Invariant : si le héros n'était pas maîtrisé, aucun paquet n'est envoyé.<br>
-     * Effet de bord : remet en avant les statistiques du maître.
+     * Effet de bord : remet en avant les statistiques et paquets GIC/GAS/GTL/GTM du maître.
      * </p>
      *
      * @param fighter combattant dont le tour vient de s'achever.
@@ -588,6 +596,17 @@ public final class HeroManager {
         if (client == null) { // Bloc logique : aucun envoi si le maître est déjà déconnecté.
             return;
         }
+        client.resetControlledFighter(); // Bloc logique : restaure l'identifiant de contrôle par défaut côté session.
+        Fight fight = master.getFight(); // Bloc logique : capture le combat courant pour resynchroniser l'affichage.
+        if (fight != null) { // Bloc logique : envoie les paquets combat uniquement si le maître est toujours en affrontement.
+            Fighter masterFighter = fight.getFighterByPerso(master); // Bloc logique : retrouve le combattant représentant le maître.
+            if (masterFighter != null) { // Bloc logique : évite les paquets incohérents si le maître a quitté le combat.
+                SocketManager.GAME_SEND_GIC_PACKET(master, masterFighter); // Bloc logique : remet le focus de l'UI sur le maître.
+                SocketManager.GAME_SEND_GAS_PACKET(master, masterFighter.getId()); // Bloc logique : confirme l'identifiant du combattant actif.
+                SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline pour refléter les PA/PM du maître.
+                SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Bloc logique : répercute les PV et la position du maître.
+            }
+        }
         SocketManager.GAME_SEND_STATS_PACKET(client, master); // Réaffiche les caractéristiques du maître côté client.
         SocketManager.GAME_SEND_SPELL_LIST(client, master); // Restaure la barre de sorts d'origine.
         SocketManager.GAME_SEND_Ow_PACKET(client, master); // Recalcule les pods visibles pour éviter toute confusion.
@@ -828,9 +847,10 @@ public final class HeroManager {
 
     /** Notes pédagogiques
      * - Utiliser {@link #getActiveHeroes(Player)} avant un combat pour récupérer l'ordre d'apparition des héros.
-     * - {@link #prepareTurnControl(Fight, Fighter)} déclenche l'envoi des statistiques du héros au maître avant chaque tour.
-     * - {@link #finalizeTurnControl(Fighter)} restitue automatiquement l'interface du maître une fois le tour du héros terminé.
-     * - {@link #resolveControlledActor(Player)} permet aux paquets entrants d'identifier le bon combattant à piloter.
+     * - {@link #prepareTurnControl(Fight, Fighter)} déclenche désormais l'envoi ciblé des paquets GIC/GAS/GTL/GTM pour mettre à jour l'UI du maître.
+     * - {@link #finalizeTurnControl(Fighter)} restitue automatiquement l'interface du maître en réinitialisant {@link GameClient#resetControlledFighter()}.
+     * - {@link #resolveControlledActor(Player)} reste un filet de sécurité lorsque l'identifiant de combattant contrôlé n'est plus disponible.
      * - Les instantanés ({@link HeroSnapshot}) restent indispensables pour restaurer proprement les positions hors combat.
+     * - {@link #releaseControlFor(Player, Player)} centralise la remise à zéro des paquets et du suivi de contrôle côté session.
      */
 }

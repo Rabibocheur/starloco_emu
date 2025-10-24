@@ -803,6 +803,28 @@ public class SocketManager {
 
     }
 
+    /**
+     * Envoie un paquet GIC ciblé pour forcer la sélection d'un combattant auprès d'un joueur donné.
+     * <p>
+     * Exemple : {@code GAME_SEND_GIC_PACKET(master, fighter)} lorsqu'un héros prend la main.<br>
+     * Cas d'erreur : appeler avec un combattant sans cellule génère un affichage incohérent côté client.
+     * </p>
+     *
+     * @param out     joueur à informer.
+     * @param fighter combattant sélectionné.
+     */
+    public static void GAME_SEND_GIC_PACKET(Player out, Fighter fighter) {
+        if (out == null || fighter == null) { // Bloc logique : impossible de construire un paquet sans cible valide.
+            return;
+        }
+        if (fighter.getCell() == null) { // Bloc logique : le client exige une cellule connue pour rafraîchir l'UI.
+            return;
+        }
+        StringBuilder packet = new StringBuilder("GIC|"); // Bloc logique : prépare le format GIC standard.
+        packet.append(fighter.getId()).append(";").append(fighter.getCell().getId()).append(";1|"); // Bloc logique : encode l'identifiant, la cellule et le drapeau de sélection.
+        send(out, packet.toString()); // Bloc logique : expédie immédiatement le paquet au joueur ciblé.
+    }
+
     public static void GAME_SEND_GS_PACKET_TO_FIGHT(Fight fight, int teams) {
         String packet = "GS";
         for (Fighter f : fight.getFighters(teams)) {
@@ -929,6 +951,23 @@ public class SocketManager {
             send(f.getPersonnage(), packet);
         }
 
+    }
+
+    /**
+     * Informe un joueur spécifique du combattant qui devient actif via le paquet GAS.
+     * <p>
+     * Exemple : {@code GAME_SEND_GAS_PACKET(master, fighter.getId())} après {@link #GAME_SEND_GIC_PACKET(Player, Fighter)}.<br>
+     * Cas d'erreur : transmettre un identifiant de combattant inexistant laisse l'UI bloquée sur le maître.
+     * </p>
+     *
+     * @param out       joueur à mettre à jour.
+     * @param fighterId identifiant du combattant actif.
+     */
+    public static void GAME_SEND_GAS_PACKET(Player out, int fighterId) {
+        if (out == null) { // Bloc logique : sans destinataire, aucune information à envoyer.
+            return;
+        }
+        send(out, "GAS" + fighterId); // Bloc logique : Gère la sélection d'un combattant côté client.
     }
 
     public static void GAME_SEND_GA_PACKET_TO_FIGHT(Fight fight, int teams,

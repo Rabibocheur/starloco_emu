@@ -85,6 +85,7 @@ public class GameClient {
             "</cross-domain-policy>";
     private Account account;
     private Player player;
+    private int controlledFighterId = -1; // Identifiant du combattant piloté pendant le tour courant ; -1 signifie le maître.
     private boolean walk = false;
     private AdminUser adminUser;
     private final Map<Integer, GameAction> actions = new HashMap<>();
@@ -119,14 +120,65 @@ public class GameClient {
      * <p>
      * Exemple : lors d'un tour de héros, {@code resolveFightActor()} renvoie ce héros au lieu du maître.<br>
      * Cas d'erreur : si la session est déjà déconnectée, la méthode retombe sur le maître pour éviter un {@code null}.
+     * Invariant : si {@link #getControlledFighterId()} est défini, le résultat correspond toujours au combattant associé à cet identifiant.
      * </p>
      *
      * @return joueur actif (héros contrôlé ou maître par défaut).
      */
     private Player resolveFightActor() {
-        Player sessionPlayer = this.player;
-        Player resolved = HeroManager.getInstance().resolveControlledActor(sessionPlayer); // Identifie le combattant réellement piloté par la session.
-        return resolved != null ? resolved : sessionPlayer;
+        Player sessionPlayer = this.player; // Bloc logique : mémorise le joueur attaché à la session réseau.
+        if (sessionPlayer == null) { // Bloc logique : aucune résolution possible si la session n'a plus de personnage.
+            return null;
+        }
+        Fight fight = sessionPlayer.getFight(); // Bloc logique : récupère le combat courant pour retrouver le combattant ciblé.
+        if (this.controlledFighterId != -1 && fight != null) { // Bloc logique : tente d'identifier un héros explicitement contrôlé.
+            Fighter targeted = fight.getFighterById(this.controlledFighterId); // Bloc logique : recherche le combattant par identifiant persistant.
+            if (targeted != null && targeted.getPersonnage() != null) { // Bloc logique : valide l'existence d'un personnage jouable.
+                return targeted.getPersonnage(); // Bloc logique : renvoie immédiatement le héros contrôlé si toutes les vérifications passent.
+            }
+        }
+        Player resolved = HeroManager.getInstance().resolveControlledActor(sessionPlayer); // Bloc logique : retombe sur la logique historique si aucun identifiant n'est défini.
+        return resolved != null ? resolved : sessionPlayer; // Bloc logique : assure toujours un résultat non nul pour sécuriser les appels.
+    }
+
+    /**
+     * Fournit l'identifiant du combattant actuellement contrôlé par la session.
+     * <p>
+     * Exemple : {@code if(client.getControlledFighterId() != -1)...} distingue un tour de héros du tour du maître.<br>
+     * Cas d'erreur : oublier de vérifier {@code -1} peut conduire à rechercher un combattant inexistant.
+     * Invariant : l'identifiant est remis à {@code -1} par {@link #resetControlledFighter()} après chaque fin de tour.
+     * </p>
+     *
+     * @return identifiant du combattant contrôlé ou {@code -1} si la session pilote le maître.
+     */
+    public int getControlledFighterId() {
+        return this.controlledFighterId;
+    }
+
+    /**
+     * Définit l'identifiant du combattant contrôlé pour la durée du tour courant.
+     * <p>
+     * Exemple : {@code client.setControlledFighterId(fighter.getId())} déclenche la redirection des sorts sur ce héros.<br>
+     * Cas d'erreur : appeler cette méthode avec un combattant mort fige l'interface, il faut donc tester {@link Fighter#isDead()} en amont.
+     * Effet de bord : remplace la valeur précédente sans notification automatique ; il est conseillé d'envoyer les paquets GIC/GAS juste après.
+     * </p>
+     *
+     * @param fighterId identifiant du combattant à cibler (utiliser {@code -1} pour revenir au maître).
+     */
+    public void setControlledFighterId(int fighterId) {
+        this.controlledFighterId = fighterId;
+    }
+
+    /**
+     * Réinitialise l'identifiant du combattant contrôlé après un tour ou une déconnexion.
+     * <p>
+     * Exemple : {@code client.resetControlledFighter()} est invoqué par {@link org.starloco.locos.heros.HeroManager#finalizeTurnControl(Fighter)}.<br>
+     * Cas d'erreur : omettre l'appel maintient les actions du maître sur un héros obsolète.
+     * Effet de bord : remet l'interface en configuration "maître" en liaison avec les paquets de fin de tour.
+     * </p>
+     */
+    public void resetControlledFighter() {
+        this.controlledFighterId = -1; // Bloc logique : -1 signifie qu'aucun héros n'est actuellement piloté.
     }
 
     public Account getAccount() {
@@ -7760,4 +7812,11 @@ public class GameClient {
             e.printStackTrace();
         }
     }
+
+    /** Notes pédagogiques
+     * - {@link #setControlledFighterId(int)} est toujours suivi d'envois GIC/GAS pour maintenir l'UI en phase avec le combattant ciblé.
+     * - {@link #resolveFightActor()} bascule d'abord sur l'identifiant persisté avant de recourir au {@link HeroManager}.
+     * - {@link #resetControlledFighter()} doit être appelé à chaque fin de tour afin d'éviter des redirections vers un héros inactif.
+     * - Les actions réseau (GA/GAS/GAF) utilisent la valeur retournée par {@link #getControlledFighterId()} pour retrouver le bon {@link Fighter}.
+     */
 }
