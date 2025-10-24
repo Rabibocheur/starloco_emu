@@ -1,6 +1,6 @@
 <component name="ArtifactManager">
   <artifact type="jar" name="StarlocoGame:jar">
-    <output-path>$PROJECT_DIR$/out/artifacts/StarlocoGame_jar</output-path>
+    <output-path>$PROJECT_DIR$/../StarLoco 09 03 2023 v7/03 - Emulateur StarLoco Fun/04 - Game</output-path>
     <root id="archive" name="StarlocoGame.jar">
       <element id="module-output" name="StarlocoGame" />
       <element id="extracted-dir" path="$PROJECT_DIR$/libs/jep.jar" path-in-jar="/" />

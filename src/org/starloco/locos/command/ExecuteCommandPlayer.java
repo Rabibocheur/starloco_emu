@@ -82,7 +82,8 @@ public class ExecuteCommandPlayer {
         if (msg.charAt(0) == '.' && msg.charAt(1) != '.') {
 
             if (msg.length() >= 6 && msg.substring(1, 6).equalsIgnoreCase("heros")) {
-                return HeroCommandHandler.handleCommand(player, msg);
+                String content = msg.replace("|", "");
+                return HeroCommandHandler.handleCommand(player, content);
             }
 
             final String commandName = msg.substring(0, msg.length() - 1).trim().split(" ")[0].substring(1);
