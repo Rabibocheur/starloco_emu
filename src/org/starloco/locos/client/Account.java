@@ -8,6 +8,7 @@ import org.starloco.locos.game.world.World;
 import org.starloco.locos.hdv.HdvEntry;
 import org.starloco.locos.kernel.Main;
 import org.starloco.locos.object.GameObject;
+import org.starloco.locos.heros.HeroManager;
 
 import java.util.*;
 
@@ -537,10 +538,12 @@ public class Account {
     }
 
     public void disconnect(Player player) {
-    	player.setChangeName(false); // By Coding Mestre - [FIX] Name changing potion is now working as expected Close #38
+        player.setChangeName(false); // By Coding Mestre - [FIX] Name changing potion is now working as expected Close #38
         Database.getStatics().getAccountData().setLogged(this.getId(), 0);
         Database.getStatics().getPlayerData().updateAllLogged(this.getId(), 0);
         Database.getStatics().getPlayerData().update(player);
+
+        HeroManager.getInstance().removeAllForMaster(player);
 
         if (player.getExchangeAction() != null)
             GameClient.leaveExchange(player);

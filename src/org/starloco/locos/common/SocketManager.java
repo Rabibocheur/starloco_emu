@@ -15,6 +15,7 @@ import org.starloco.locos.game.GameServer;
 import org.starloco.locos.game.world.World;
 import org.starloco.locos.hdv.Hdv;
 import org.starloco.locos.hdv.HdvEntry;
+import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.job.JobStat;
 import org.starloco.locos.kernel.Config;
 import org.starloco.locos.kernel.Constant;
@@ -39,8 +40,13 @@ import java.util.Map.Entry;
 public class SocketManager {
 
     public static void send(Player player, String packet) {
-        if (player != null && player.getAccount() != null)
-            SocketManager.send(player.getGameClient(), packet);
+        if (player == null || player.getAccount() == null) {
+            return;
+        }
+        if (HeroManager.getInstance().isHero(player)) {
+            return;
+        }
+        SocketManager.send(player.getGameClient(), packet);
     }
 
     public static void send(GameClient client, String packet) {

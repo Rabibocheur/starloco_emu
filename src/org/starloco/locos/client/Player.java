@@ -37,6 +37,7 @@ import org.starloco.locos.entity.monster.Monster;
 import org.starloco.locos.fight.spells.Spell;
 import org.starloco.locos.fight.spells.Spell.SortStats;
 import org.starloco.locos.other.Action;
+import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.other.Dopeul;
 import org.starloco.locos.other.Guild;
 import org.starloco.locos.util.lang.Lang;
@@ -1259,6 +1260,7 @@ public class Player {
 
     public void setCurCell(GameCase cell) {
         curCell = cell;
+        HeroManager.getInstance().onPlayerCellUpdated(this, cell);
     }
 
     public int get_size() {
@@ -1294,6 +1296,7 @@ public class Player {
 
     public void setCurMap(GameMap curMap) {
         this.curMap = curMap;
+        HeroManager.getInstance().onPlayerMapUpdated(this, curMap);
     }
 
     public boolean isAway() {
