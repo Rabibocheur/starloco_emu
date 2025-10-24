@@ -10,6 +10,7 @@ import org.starloco.locos.game.GameClient;
 import org.starloco.locos.fight.Fight;
 import org.starloco.locos.fight.Fighter;
 import org.starloco.locos.game.world.World;
+import org.starloco.locos.kernel.Logging;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -213,8 +214,11 @@ public final class HeroManager {
         candidate.set_orientation(orientation);
         master.set_orientation(orientation);
 
-        master.getAccount().setCurrentPlayer(candidate);
-        client.switchActivePlayer(candidate);
+        master.getAccount().setCurrentPlayer(candidate); // Bloc logique : aligne l'état du compte sur le nouveau personnage actif.
+        if (!client.switchActivePlayer(candidate) && Logging.USE_LOG) { // Bloc logique : trace un refus improbable pour dépister un état incohérent.
+            Logging.getInstance().write("HeroControl", "[JOIN] Echec switch permanent master=" + master.getId()
+                    + " hero=" + candidate.getId());
+        }
 
         Database.getStatics().getPlayerData().updateLogged(master.getId(), 0);
 

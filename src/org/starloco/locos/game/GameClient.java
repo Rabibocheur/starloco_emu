@@ -107,12 +107,48 @@ public class GameClient {
     }
 
     /**
-     * Met à jour le personnage contrôlé sans interrompre la session.
+     * Bascule la session réseau sur un autre personnage sans rompre la connexion.
+     * <p>
+     * Exemple : {@code client.switchActivePlayer(hero)} lors du tour d'un héros pour traiter ses paquets combat.<br>
+     * Cas d'erreur fréquent : cibler un personnage d'un autre compte, le garde-fou renvoie alors {@code false}.<br>
+     * Invariant : en cas de succès, {@link #getPlayer()} et {@link Account#getCurrentPlayer()} pointent sur la même instance.
+     * Effet de bord : met à jour l'association compte ↔ joueur pour que les commandes entrantes soient routées sur la bonne entité.
+     * </p>
      *
-     * @param player nouveau personnage actif.
+     * @param player nouveau personnage actif (héros ou maître).
+     * @return {@code true} si le basculement est effectif, {@code false} sinon.
      */
-    public void switchActivePlayer(Player player) {
-        this.player = player;
+    public boolean switchActivePlayer(Player player) {
+        if (player == null) { // Bloc logique : refuse immédiatement une cible absente pour éviter un état de session incohérent.
+            if (Logging.USE_LOG) { // Bloc logique : trace l'erreur pour faciliter le diagnostic côté support.
+                Logging.getInstance().write("HeroControl", "[SWITCH] Echec : cible nulle pour session "
+                        + (this.account != null ? this.account.getId() : "sans-compte"));
+            }
+            return false;
+        }
+        Account sessionAccount = this.account; // Bloc logique : capture l'état courant du compte pour synchroniser la référence.
+        if (sessionAccount != null && player.getAccount() != null
+                && sessionAccount.getId() != player.getAccount().getId()) { // Bloc logique : bloque un switch inter-compte accidentel.
+            if (Logging.USE_LOG) { // Bloc logique : journalise la cause précise afin de suivre les incohérences multi-comptes.
+                Logging.getInstance().write("HeroControl", "[SWITCH] Refus : compte session=" + sessionAccount.getId()
+                        + " cible=" + player.getAccount().getId() + " joueur=" + player.getId());
+            }
+            return false;
+        }
+        Player previous = this.player; // Bloc logique : mémorise l'incarnation précédente pour l'ajouter aux logs de traçabilité.
+        this.player = player; // Bloc logique : applique le nouveau contrôleur pour que les paquets entrants ciblent la bonne entité.
+        if (sessionAccount != null) { // Bloc logique : maintient l'invariant compte ↔ joueur actif.
+            if (player.getAccount() == null) { // Bloc logique : rattache le héros au compte si la référence a été perdue.
+                player.setAccount(sessionAccount);
+            }
+            sessionAccount.setCurrentPlayer(player); // Effet de bord : informe le compte du changement afin d'aligner les autres services (chat, amis, etc.).
+        }
+        if (Logging.USE_LOG) { // Bloc logique : confirme la bascule avec le contexte utile pour reproduire un bug éventuel.
+            Logging.getInstance().write("HeroControl", "[SWITCH] Succès session="
+                    + (sessionAccount != null ? sessionAccount.getId() : "sans-compte") + " ancien="
+                    + (previous != null ? previous.getId() : "aucun") + " nouveau=" + player.getId());
+        }
+        return true; // Bloc logique : indique clairement aux appelants que la session incarne désormais le joueur ciblé.
     }
 
     /**
