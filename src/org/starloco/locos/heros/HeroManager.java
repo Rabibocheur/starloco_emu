@@ -23,8 +23,6 @@ public final class HeroManager {
 
     private final Map<Integer, HeroGroup> groups = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> heroToMaster = new ConcurrentHashMap<>();
-    private final ThreadLocal<Boolean> positionUpdate = ThreadLocal.withInitial(() -> Boolean.FALSE);
-
     private HeroManager() {
     }
 
@@ -68,6 +66,7 @@ public final class HeroManager {
         if (group.heroes.size() >= HERO_LIMIT) {
             return HeroOperationResult.error("Vous avez déjà trois héros actifs.");
         }
+        // Supprime tout état résiduel d'une précédente session héros avant rattachement.
         detachHero(hero);
         initializeHeroPosition(master, hero);
         group.heroes.put(hero.getId(), hero);
@@ -173,19 +172,12 @@ public final class HeroManager {
         if (group == null) {
             return;
         }
-        if (Boolean.TRUE.equals(positionUpdate.get())) {
-            return;
-        }
-        positionUpdate.set(Boolean.TRUE);
-        try {
-            for (Player hero : group.heroes.values()) {
-                if (hero == null) {
-                    continue;
-                }
-                hero.setVirtualPosition(newMap, null);
+        // Réplique uniquement l'état logique : aucune inscription réseau n'est effectuée ici.
+        for (Player hero : group.heroes.values()) {
+            if (hero == null) {
+                continue;
             }
-        } finally {
-            positionUpdate.set(Boolean.FALSE);
+            hero.setVirtualPosition(newMap, null);
         }
     }
 
@@ -203,24 +195,17 @@ public final class HeroManager {
         if (group == null) {
             return;
         }
-        if (Boolean.TRUE.equals(positionUpdate.get())) {
-            return;
-        }
-        positionUpdate.set(Boolean.TRUE);
-        try {
-            for (Player hero : group.heroes.values()) {
-                if (hero == null) {
-                    continue;
-                }
-                GameMap masterMap = player.getCurMap();
-                if (masterMap != null && newCell != null) {
-                    hero.setVirtualPosition(masterMap.getId(), newCell.getId());
-                } else {
-                    hero.setVirtualPosition(masterMap, newCell);
-                }
+        // Les héros restent "fantômes" : seule la position mémoire est alignée sur celle du maître.
+        for (Player hero : group.heroes.values()) {
+            if (hero == null) {
+                continue;
             }
-        } finally {
-            positionUpdate.set(Boolean.FALSE);
+            GameMap masterMap = player.getCurMap();
+            if (masterMap != null && newCell != null) {
+                hero.setVirtualPosition(masterMap.getId(), newCell.getId());
+            } else {
+                hero.setVirtualPosition(masterMap, newCell);
+            }
         }
     }
 
@@ -273,6 +258,7 @@ public final class HeroManager {
     private void attachToParty(Player master, Player hero) {
         Party party = master.getParty();
         if (party == null) {
+            // Crée un groupe minimal afin que le maître et le héros partagent les gains.
             party = new Party(master, hero);
             party.setMaster(master);
             master.setParty(party);
@@ -309,6 +295,7 @@ public final class HeroManager {
     }
 
     private void updatePositionsAfterJoin(Player master) {
+        // Exécute immédiatement les callbacks de synchronisation pour un héros fraîchement activé.
         if (master.getCurMap() != null) {
             onPlayerMapUpdated(master, master.getCurMap());
         }
