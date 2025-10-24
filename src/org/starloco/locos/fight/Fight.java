@@ -606,6 +606,33 @@ public class Fight {
         return curPlayer;
     }
 
+    /**
+     * Donne le nombre de tours déjà entamés dans ce combat.
+     * <p>
+     * Exemple : {@code fight.getTurnsCount()} pour journaliser l'avancement des héros.<br>
+     * Invariant : la valeur est toujours >= 1 dès que le combat commence.
+     * </p>
+     *
+     * @return compteur de tours courant transmis aux paquets GTS.
+     */
+    public int getTurnsCount() {
+        return this.turns; // Bloc logique : expose le compteur interne sans recalcul.
+    }
+
+    /**
+     * Calcule le temps écoulé depuis le lancement du combat.
+     * <p>
+     * Exemple : {@code fight.getElapsedFightTime()} pour alimenter GTS.<br>
+     * Effet de bord : aucun, simple lecture de l'horodatage initial.
+     * </p>
+     *
+     * @return durée écoulée en millisecondes depuis {@code launchTime}.
+     */
+    public int getElapsedFightTime() {
+        long now = System.currentTimeMillis(); // Bloc logique : capture l'instant présent.
+        return (int) (now - this.launchTime); // Bloc logique : convertit en int pour rester compatible avec les paquets GTS.
+    }
+
     void setCurPlayer(int curPlayer) {
         this.curPlayer = curPlayer;
     }

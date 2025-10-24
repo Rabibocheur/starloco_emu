@@ -172,23 +172,40 @@ public class SocketManager {
 
     public static void GAME_SEND_ASK(GameClient out, Player perso) {
         try {
-            StringBuilder packet = new StringBuilder();
-            int color1 = perso.getColor1(), color2 = perso.getColor2(), color3 = perso.getColor3();
-            if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION) != null) {
-                if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION).getTemplate().getId() == 10838) {
-                    color1 = 16342021;
-                    color2 = 16342021;
-                    color3 = 16342021;
-                }
-            }
-            packet.append("ASK|").append(perso.getId()).append("|").append(perso.getName()).append("|");
-            packet.append(perso.getLevel()).append("|").append(perso.getMorphMode() ? -1 : perso.getClasse()).append("|").append(perso.getSexe());
-            packet.append("|").append(perso.getGfxId()).append("|").append((color1 == -1 ? "-1" : Integer.toHexString(color1)));
-            packet.append("|").append((color2 == -1 ? "-1" : Integer.toHexString(color2))).append("|");
-            packet.append((color3 == -1 ? "-1" : Integer.toHexString(color3))).append("|");
-            packet.append(perso.parseItemToASK());
-            send(out, packet.toString());
+            send(out, buildAskPacket(perso)); // Bloc logique : diffuse le paquet complet lorsqu'on charge l'interface hors combat.
         } catch(Exception e) { e.printStackTrace(); System.out.println("Error occured : " + e.getMessage());}
+    }
+
+    public static void GAME_SEND_MINI_ASK_PACKET(GameClient client, Player target) {
+        try {
+            send(client, buildAskPacket(target)); // Bloc logique : réutilise le même coeur pour simuler une incarnation sans GDM.
+        } catch (Exception e) { e.printStackTrace(); System.out.println("Error occured : " + e.getMessage()); }
+    }
+
+    private static String buildAskPacket(Player perso) {
+        StringBuilder packet = new StringBuilder(); // Bloc logique : buffer central pour concaténer les segments.
+        int color1 = perso.getColor1(); // Bloc logique : capture la première couleur avant mutation éventuelle.
+        int color2 = perso.getColor2(); // Bloc logique : capture la seconde couleur d'origine.
+        int color3 = perso.getColor3(); // Bloc logique : capture la troisième couleur pour un rendu fidèle.
+        if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION) != null) { // Bloc logique : détecte une coiffe spéciale.
+            if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION).getTemplate().getId() == 10838) { // Bloc logique : vérifie la coiffe vampyro.
+                color1 = 16342021; // Bloc logique : force la palette blanche imposée.
+                color2 = 16342021; // Bloc logique : applique aussi la teinte blanche sur la seconde composante.
+                color3 = 16342021; // Bloc logique : harmonise la troisième composante.
+            }
+        }
+        packet.append("ASK|"); // Bloc logique : préfixe obligatoire pour l'identification du paquet.
+        packet.append(perso.getId()).append("|"); // Bloc logique : injecte l'identifiant unique du personnage.
+        packet.append(perso.getName()).append("|"); // Bloc logique : transmet le nom affiché côté client.
+        packet.append(perso.getLevel()).append("|"); // Bloc logique : fournit le niveau pour l'interface de caractéristiques.
+        packet.append(perso.getMorphMode() ? -1 : perso.getClasse()).append("|"); // Bloc logique : classe ou -1 si morphose.
+        packet.append(perso.getSexe()).append("|"); // Bloc logique : encode le genre pour choisir le sprite.
+        packet.append(perso.getGfxId()).append("|"); // Bloc logique : véhicule l'identifiant du sprite principal.
+        packet.append(color1 == -1 ? "-1" : Integer.toHexString(color1)).append("|"); // Bloc logique : convertit la couleur primaire.
+        packet.append(color2 == -1 ? "-1" : Integer.toHexString(color2)).append("|"); // Bloc logique : convertit la couleur secondaire.
+        packet.append(color3 == -1 ? "-1" : Integer.toHexString(color3)).append("|"); // Bloc logique : convertit la couleur tertiaire.
+        packet.append(perso.parseItemToASK()); // Effet de bord : ajoute l'équipement pour dessiner le personnage.
+        return packet.toString(); // Bloc logique : renvoie la chaîne prête à l'envoi.
     }
 
     public static void GAME_SEND_ALIGNEMENT(GameClient out, int alliID) {
