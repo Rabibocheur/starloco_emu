@@ -5,6 +5,7 @@ import org.starloco.locos.common.SocketManager;
 import org.starloco.locos.fight.Fight;
 import org.starloco.locos.fight.Fighter;
 import org.starloco.locos.game.GameClient;
+import org.starloco.locos.kernel.Logging;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 final class HeroFightController {
 
+    private static final String HERO_LOG_CONTEXT = "HeroControl"; // Contexte de logs dédié pour filtrer rapidement les traces liées aux incarnations.
     private final HeroManager heroManager; // Référence principale pour accéder aux métadonnées des héros.
     private final Map<Integer, Player> activeHeroControl = new ConcurrentHashMap<>(); // Mémorise quel héros est piloté par chaque maître.
     private final Map<Integer, Player> sessionIncarnationSnapshots = new ConcurrentHashMap<>(); // Capture le personnage incarné avant de basculer temporairement sur un héros.
@@ -111,28 +113,87 @@ final class HeroFightController {
             releaseControlFor(actor, null); // Effet de bord : s'assure que le maître voit de nouveau son personnage.
             return true;
         }
-        Player master = heroManager.findMaster(actor);
+        Player master = heroManager.findMaster(actor); // Bloc logique : récupère le propriétaire du héros pour orienter la session.
         if (master == null) { // Bloc logique : en l'absence de maître connecté, on demande un passage de tour.
+            if (Logging.USE_LOG) { // Bloc logique : journalise la situation pour identifier les combats orphelins.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Refus car maître introuvable pour héros=" + actor.getId());
+            }
             return false;
+        }
+        if (fighter.isDead()) { // Bloc logique : évite de basculer sur un héros déjà éliminé.
+            if (Logging.USE_LOG) { // Bloc logique : trace l'état afin de vérifier l'ordre d'appel côté combat.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Ignoré car héros mort fight=" + fight.getId()
+                        + " hero=" + actor.getId());
+            }
+            releaseControlFor(master, actor); // Effet de bord : assure un retour immédiat sur le maître.
+            return true;
         }
         GameClient client = master.getGameClient();
         if (client == null || master.getFight() != fight) { // Bloc logique : abandonne si le client est déconnecté ou sur un autre combat.
+            if (Logging.USE_LOG) { // Bloc logique : détaille la raison (déconnexion ou combat divergent).
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Refus car client hors-ligne ou combat différent master="
+                        + master.getId() + " fight=" + fight.getId());
+            }
             if (client != null) { // Bloc logique : réinitialise la session si le réseau est toujours accessible.
                 client.resetControlledFighter(); // Effet de bord : évite de conserver un identifiant obsolète côté client.
             }
             clearManualControl(master); // Bloc logique : purge la carte de contrôle pour éviter les incohérences.
             return false;
         }
+        if (master.isEsclave()) { // Bloc logique : protège les cas où le maître est lui-même incarné comme esclave.
+            if (Logging.USE_LOG) { // Bloc logique : note l'état pour repérer les verrous côté gameplay.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Refus car maître esclave master=" + master.getId());
+            }
+            return false;
+        }
+        if (actor.getAccount() != null && master.getAccount() != null
+                && actor.getAccount().getId() != master.getAccount().getId()) { // Bloc logique : empêche les croisements de comptes.
+            if (Logging.USE_LOG) { // Bloc logique : log l'anomalie pour l'équipe QA.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Refus car comptes divergents master=" + master.getId()
+                        + " hero=" + actor.getId());
+            }
+            return false;
+        }
+        Fighter resolved = fight.getFighterById(fighter.getId()); // Bloc logique : valide que le combattant ciblé est bien enregistré dans ce combat.
+        if (resolved == null) { // Bloc logique : évite de cibler un combattant qui aurait disparu (ex : retrait de timeline).
+            if (Logging.USE_LOG) { // Bloc logique : trace l'incohérence pour examen ultérieur.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Refus car fighter introuvable fight=" + fight.getId()
+                        + " hero=" + actor.getId() + " fighterId=" + fighter.getId());
+            }
+            return false;
+        }
+        if (Logging.USE_LOG) { // Bloc logique : log de contexte avant bascule pour vérifier les IDs échangés.
+            Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Préparation fight=" + fight.getId() + " master=" + master.getId()
+                    + " hero=" + actor.getId() + " fighter=" + fighter.getId());
+        }
+        if (!engageTemporaryIncarnation(master, actor)) { // Bloc logique : abandonne si la session refuse de changer d'incarnation.
+            client.resetControlledFighter(); // Effet de bord : nettoie toute tentative partielle.
+            clearManualControl(master); // Bloc logique : purge les caches de contrôle pour éviter les suivis fantômes.
+            return false;
+        }
+        Player incarnated = client.getPlayer(); // Bloc logique : contrôle immédiat que la session pointe bien sur le héros.
+        if (incarnated == null || incarnated.getId() != actor.getId()) { // Bloc logique : abandonne si le switch n'est pas visible côté session.
+            if (Logging.USE_LOG) { // Bloc logique : détaille la divergence pour l'équipe de test.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Refus car incarnation reste sur="
+                        + (incarnated != null ? incarnated.getId() : "aucun") + " attendu=" + actor.getId());
+            }
+            client.resetControlledFighter(); // Effet de bord : remet la session dans un état cohérent.
+            clearManualControl(master); // Bloc logique : supprime le suivi de contrôle erroné.
+            return false;
+        }
         activeHeroControl.put(master.getId(), actor); // Bloc logique : mémorise quel héros est désormais piloté.
-        engageTemporaryIncarnation(master, actor); // Effet de bord : bascule la session réseau du maître sur le héros actif pendant ce tour.
         client.setControlledFighterId(fighter.getId()); // Effet de bord : informe le client du combattant actif.
         SocketManager.GAME_SEND_GIC_PACKET(master, fighter); // Bloc logique : centre l'interface combat sur le héros ciblé.
         SocketManager.GAME_SEND_GAS_PACKET(master, fighter.getId()); // Bloc logique : actualise l'ordre de jeu côté client.
-        SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline pour refléter PA/PM à jour.
         SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Bloc logique : synchronise PV et positions du combattant.
+        SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline pour refléter PA/PM à jour.
         SocketManager.GAME_SEND_STATS_PACKET(client, actor); // Effet de bord : met à jour la fiche de caractéristiques.
         SocketManager.GAME_SEND_SPELL_LIST(client, actor); // Bloc logique : aligne la barre de sorts du héros actif.
         SocketManager.GAME_SEND_Ow_PACKET(client, actor); // Bloc logique : synchronise l'inventaire (pods).
+        if (Logging.USE_LOG) { // Bloc logique : confirme l'ordre d'envoi des paquets pour relecture rapide.
+            Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Switch confirmé hero=" + actor.getId() + " fighter="
+                    + fighter.getId());
+        }
         return true;
     }
 
@@ -225,6 +286,11 @@ final class HeroFightController {
         SocketManager.GAME_SEND_STATS_PACKET(client, master); // Effet de bord : réaffiche les caractéristiques du maître.
         SocketManager.GAME_SEND_SPELL_LIST(client, master); // Bloc logique : restaure la barre de sorts d'origine.
         SocketManager.GAME_SEND_Ow_PACKET(client, master); // Bloc logique : recalcul des pods visibles pour le maître.
+        if (Logging.USE_LOG) { // Bloc logique : confirme le retour d'incarnation avec l'identifiant actif.
+            Player incarnated = client.getPlayer();
+            Logging.getInstance().write(HERO_LOG_CONTEXT, "[RESTORE] Master=" + master.getId() + " incarné="
+                    + (incarnated != null ? incarnated.getId() : "aucun"));
+        }
     }
 
     /**
@@ -237,23 +303,40 @@ final class HeroFightController {
      *
      * @param master maître dont la session réseau doit être déplacée.
      * @param hero   héros qui devient temporairement incarné.
+     * @return {@code true} si la session incarne désormais le héros, {@code false} sinon.
      */
-    private void engageTemporaryIncarnation(Player master, Player hero) {
+    private boolean engageTemporaryIncarnation(Player master, Player hero) {
         if (master == null || hero == null) { // Bloc logique : aucune incarnation possible sans paire valide.
-            return;
+            if (Logging.USE_LOG) { // Bloc logique : trace l'erreur pour identifier l'appel fautif.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[SWITCH] Annulé car pair invalide master="
+                        + (master != null ? master.getId() : "aucun") + " hero="
+                        + (hero != null ? hero.getId() : "aucun"));
+            }
+            return false;
         }
         GameClient client = master.getGameClient();
         if (client == null) { // Bloc logique : abandonne si la session réseau n'est plus active.
-            return;
+            if (Logging.USE_LOG) { // Bloc logique : note la déconnexion pour corréler avec les logs réseau.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[SWITCH] Annulé car client déconnecté master=" + master.getId());
+            }
+            return false;
         }
         Player currentlyIncarnated = client.getPlayer();
         if (currentlyIncarnated != null && currentlyIncarnated.getId() == hero.getId()) { // Bloc logique : évite de dupliquer l'incarnation si le héros est déjà actif.
-            return;
+            if (Logging.USE_LOG) { // Bloc logique : consigne que l'incarnation était déjà conforme.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[SWITCH] Déjà incarné hero=" + hero.getId());
+            }
+            return true;
         }
         if (!sessionIncarnationSnapshots.containsKey(master.getId())) { // Bloc logique : mémorise le maître initial seulement une fois par tour.
             sessionIncarnationSnapshots.put(master.getId(), currentlyIncarnated != null ? currentlyIncarnated : master); // Effet de bord : stocke le personnage de référence pour la restauration.
         }
-        client.switchActivePlayer(hero); // Effet de bord : bascule l'incarnation côté client sans rompre la session réseau.
+        boolean switched = client.switchActivePlayer(hero); // Effet de bord : bascule l'incarnation côté client sans rompre la session réseau.
+        if (!switched && Logging.USE_LOG) { // Bloc logique : journalise tout refus de bascule pour investigation.
+            Logging.getInstance().write(HERO_LOG_CONTEXT, "[SWITCH] Echec incarnation hero=" + hero.getId() + " master="
+                    + master.getId());
+        }
+        return switched; // Bloc logique : relaie l'état réel du switch aux appelants.
     }
 
     /**
@@ -279,9 +362,15 @@ final class HeroFightController {
         Player target = snapshot != null ? snapshot : master; // Bloc logique : retombe sur le maître si aucune sauvegarde n'est disponible.
         Player currentlyIncarnated = client.getPlayer();
         if (currentlyIncarnated != null && currentlyIncarnated.getId() == target.getId()) { // Bloc logique : évite un switch inutile lorsque l'incarnation est déjà correcte.
+            if (Logging.USE_LOG) { // Bloc logique : signale que la restauration était déjà effective.
+                Logging.getInstance().write(HERO_LOG_CONTEXT, "[RESTORE] Déjà sur=" + target.getId());
+            }
             return;
         }
-        client.switchActivePlayer(target); // Effet de bord : réaligne immédiatement la session sur le personnage maître ou sauvegardé.
+        boolean switched = client.switchActivePlayer(target); // Effet de bord : réaligne immédiatement la session sur le personnage maître ou sauvegardé.
+        if (!switched && Logging.USE_LOG) { // Bloc logique : avertit si la restauration n'a pas pu aboutir.
+            Logging.getInstance().write(HERO_LOG_CONTEXT, "[RESTORE] Echec pour cible=" + target.getId());
+        }
     }
 
     /** Notes pédagogiques
