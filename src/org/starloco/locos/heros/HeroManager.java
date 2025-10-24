@@ -182,12 +182,7 @@ public final class HeroManager {
                 if (hero == null) {
                     continue;
                 }
-                GameCase previous = hero.getCurCell();
-                if (previous != null) {
-                    previous.removePlayer(hero);
-                }
-                hero.setCurMap(newMap);
-                hero.setCurCell(null);
+                hero.setVirtualPosition(newMap, null);
             }
         } finally {
             positionUpdate.set(Boolean.FALSE);
@@ -217,17 +212,7 @@ public final class HeroManager {
                 if (hero == null) {
                     continue;
                 }
-                GameCase previous = hero.getCurCell();
-                if (previous != null && previous != newCell) {
-                    previous.removePlayer(hero);
-                }
-                if (newCell != null) {
-                    hero.setCurMap(player.getCurMap());
-                    hero.setCurCell(newCell);
-                    newCell.addPlayer(hero);
-                } else {
-                    hero.setCurCell(null);
-                }
+                hero.setVirtualPosition(player.getCurMap(), newCell);
             }
         } finally {
             positionUpdate.set(Boolean.FALSE);
@@ -301,20 +286,14 @@ public final class HeroManager {
         if (hero == null) {
             return;
         }
-        GameCase previous = hero.getCurCell();
-        if (previous != null) {
-            previous.removePlayer(hero);
-        }
-        hero.setCurCell(null);
-        hero.setCurMap(null);
+        hero.setVirtualPosition(null, null);
     }
 
     /**
      * Aligne instantanément la position du héros sur celle du maître.
      */
     private void initializeHeroPosition(Player master, Player hero) {
-        hero.setCurMap(master.getCurMap());
-        hero.setCurCell(master.getCurCell());
+        hero.setVirtualPosition(master.getCurMap(), master.getCurCell());
         hero.set_orientation(master.get_orientation());
     }
 
