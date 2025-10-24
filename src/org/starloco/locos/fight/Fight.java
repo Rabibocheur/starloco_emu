@@ -1619,8 +1619,9 @@ public class Fight {
       SocketManager.GAME_SEND_GAMETURNSTART_PACKET_TO_FIGHT(this,7,current.getId(),Constant.TIME_BY_TURN, turns);
       current.setCanPlay(true);
       this.turn=new Turn(this,current);
-      if (shouldAutoSkipTurn(current)) { // Bloc logique : déclenche le passage de tour immédiat pour un héros virtuel.
-          TimerWaiter.addNext(() -> this.endTurn(false, current), 200, TimeUnit.MILLISECONDS, TimerWaiter.DataType.FIGHT); // Programme une fin de tour rapide pour laisser le client refléter le changement.
+      HeroManager heroManager = HeroManager.getInstance(); // Centralise la logique de prise de contrôle manuel des héros.
+      if (!heroManager.prepareTurnControl(this, current)) { // Bloc logique : le maître est indisponible, on programme un passage automatique.
+          TimerWaiter.addNext(() -> this.endTurn(false, current), 200, TimeUnit.MILLISECONDS, TimerWaiter.DataType.FIGHT); // Laisse un court délai pour la mise à jour côté client avant de passer le tour.
           return;
       }
 
@@ -1722,7 +1723,7 @@ public class Fight {
             if(current.getState(Constant.ETAT_PORTEUR) == 0)
                 SocketManager.GAME_SEND_GA_PACKET_TO_FIGHT(this, 7, 950, current.getId() + "", current.getId() + "," + Constant.ETAT_PORTE + ",0");
 
-
+            HeroManager.getInstance().finalizeTurnControl(current); // Restaure le contrôle du maître avant l'envoi de fin de tour.
             SocketManager.GAME_SEND_GAMETURNSTOP_PACKET_TO_FIGHT(this, 7, current.getId());
             current.setCanPlay(false);
             setCurAction(false);
@@ -3257,27 +3258,6 @@ public class Fight {
             }
             heroManager.restoreGroupAfterFight(master); // Réactive le mode virtuel pour les héros du maître.
         }
-    }
-
-    /**
-     * Indique si le combattant doit passer son tour instantanément car il s'agit d'un héros serveur.
-     * <p>
-     * Exemple : {@code shouldAutoSkipTurn(fighter)} retourne {@code true} pour les héros ajoutés automatiquement.<br>
-     * Invariant : seules les entités jouables liées à un héros déclenchent un saut automatique.
-     * </p>
-     *
-     * @param fighter combattant courant.
-     * @return {@code true} si le tour doit être sauté automatiquement.
-     */
-    private boolean shouldAutoSkipTurn(Fighter fighter) {
-        if (fighter == null) { // Bloc logique : aucun combattant fourni.
-            return false;
-        }
-        Player player = fighter.getPersonnage(); // Récupère le joueur associé si disponible.
-        if (player == null) { // Bloc logique : les entités non joueurs jouent normalement.
-            return false;
-        }
-        return HeroManager.getInstance().isHero(player); // Les héros virtuels sautent systématiquement leur tour.
     }
 
     public synchronized void exchangePlace(Player perso, int cell) {
@@ -6045,7 +6025,8 @@ public class Fight {
 
     /** Notes pédagogiques
      * - {@link #registerHeroesForMaster(Player, int, Fighter)} insère les héros dès la phase de placement pour garantir leur visibilité.
-     * - {@link #shouldAutoSkipTurn(Fighter)} sécurise le passage de tour automatique des héros côté serveur.
+     * - Le début de tour coopère avec {@link HeroManager#prepareTurnControl(Fight, Fighter)} afin de déléguer le pilotage des héros au maître connecté.
+     * - {@link HeroManager#finalizeTurnControl(Fighter)} est invoqué via {@link #endTurn(boolean)} pour restituer l'interface au maître en fin de tour.
      * - {@link #resyncHeroesAfterFight(Collection)} replace les héros en mode virtuel à la fin d'un combat.
      */
 }

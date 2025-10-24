@@ -114,6 +114,21 @@ public class GameClient {
         this.player = player;
     }
 
+    /**
+     * Sélectionne le personnage dont les actions de combat doivent être interprétées.
+     * <p>
+     * Exemple : lors d'un tour de héros, {@code resolveFightActor()} renvoie ce héros au lieu du maître.<br>
+     * Cas d'erreur : si la session est déjà déconnectée, la méthode retombe sur le maître pour éviter un {@code null}.
+     * </p>
+     *
+     * @return joueur actif (héros contrôlé ou maître par défaut).
+     */
+    private Player resolveFightActor() {
+        Player sessionPlayer = this.player;
+        Player resolved = HeroManager.getInstance().resolveControlledActor(sessionPlayer); // Identifie le combattant réellement piloté par la session.
+        return resolved != null ? resolved : sessionPlayer;
+    }
+
     public Account getAccount() {
         return account;
     }
@@ -4308,8 +4323,12 @@ public class GameClient {
                 readyFight(packet);
                 break;
             case 't':
-                if (this.player.getFight() != null)
-                    this.player.getFight().playerPass(this.player);
+                if (this.player.getFight() != null) { // Bloc logique : le passage de tour ne s'applique qu'en combat.
+                    Player actor = resolveFightActor(); // Détermine quel combattant doit réellement passer son tour.
+                    if (actor != null) { // Bloc logique : évite les appels fantômes si le héros a disparu.
+                        this.player.getFight().playerPass(actor);
+                    }
+                }
                 break;
                 // Pour éviter map noir client > 1.34
             default:
@@ -4572,10 +4591,11 @@ public class GameClient {
             this.player.setSitted(false);
             this.player.setAway(true);
         } else {
-            final Fighter fighter = this.player.getFight().getFighterByPerso(this.player);
-            if (fighter != null) {
+            Player actor = resolveFightActor(); // Détermine si l'on déplace le maître ou un héros contrôlé.
+            final Fighter fighter = actor != null ? this.player.getFight().getFighterByPerso(actor) : null; // Bloc logique : récupère le combattant correspondant.
+            if (fighter != null) { // Bloc logique : ne traite le déplacement que si le combattant est valide.
                 GA.args = path;
-                this.player.getFight().cast(this.player.getFight().getFighterByPerso(this.player), () -> this.player.getFight().onFighterDeplace(fighter, GA));
+                this.player.getFight().cast(this.player.getFight().getFighterByPerso(actor), () -> this.player.getFight().onFighterDeplace(fighter, GA)); // Redirige le déplacement sur le bon combattant.
             }
         }
     }
@@ -4600,12 +4620,14 @@ public class GameClient {
             final int id = Integer.parseInt(split[0].substring(5)), cellId = Integer.parseInt(split[1]);
             final Fight fight = this.player.getFight();
 
-            if (fight != null) {
-                Spell.SortStats SS = this.player.getSortStatBySortIfHas(id);
+            if (fight != null) { // Bloc logique : impossible de lancer un sort hors combat.
+                Player actor = resolveFightActor(); // Identifie le lanceur effectif du sort côté serveur.
+                Spell.SortStats SS = actor != null ? actor.getSortStatBySortIfHas(id) : null; // Bloc logique : récupère les statistiques du sort sur le bon personnage.
+                Fighter caster = actor != null ? fight.getFighterByPerso(actor) : null; // Bloc logique : obtient le combattant qui effectuera réellement le lancer.
 
-                if (SS != null)
-                    if(!this.player.getFight().isCurAction() && !this.player.getFight().isTraped())
-                        this.player.getFight().cast(this.player.getFight().getFighterByPerso(this.player), () -> this.player.getFight().tryCastSpell(this.player.getFight().getFighterByPerso(this.player), SS, cellId));
+                if (SS != null && caster != null) // Bloc logique : valide la disponibilité du sort et du combattant.
+                    if(!fight.isCurAction() && !fight.isTraped()) // Bloc logique : refuse le lancement si une action est déjà en cours.
+                        fight.cast(caster, () -> fight.tryCastSpell(caster, SS, cellId)); // Transmet la requête de lancer en ciblant le héros ou le maître approprié.
             }
         } catch (NumberFormatException e) {
             System.err.println(packet + "\n" + e);
@@ -4616,8 +4638,13 @@ public class GameClient {
         try {
             if(packet.contains("undefined")) return;
             final int cell = Integer.parseInt(packet.substring(5));
-            if (this.player.getFight() != null && !this.player.getFight().isCurAction() && !this.player.getFight().isTraped())
-                this.player.getFight().cast(this.player.getFight().getFighterByPerso(this.player), () -> this.player.getFight().tryCaC(this.player, cell));
+            if (this.player.getFight() != null && !this.player.getFight().isCurAction() && !this.player.getFight().isTraped()) { // Bloc logique : vérifie que le combat accepte une action immédiate.
+                Player actor = resolveFightActor(); // Détermine quel personnage déclenche l'attaque au corps-à-corps.
+                Fighter fighter = actor != null ? this.player.getFight().getFighterByPerso(actor) : null; // Bloc logique : identifie le combattant associé.
+                if (fighter != null) { // Bloc logique : ne poursuit que si le combattant est encore présent.
+                    this.player.getFight().cast(fighter, () -> this.player.getFight().tryCaC(actor, cell)); // Redirige l'action vers le bon participant.
+                }
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }

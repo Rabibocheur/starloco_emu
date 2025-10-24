@@ -128,6 +128,14 @@ public class SocketManager {
 
     }
 
+    public static void GAME_SEND_STATS_PACKET(GameClient client, Player target) {
+        if (client == null || target == null) { // Bloc logique : sans client ni cible, aucun envoi n'est pertinent.
+            return;
+        }
+        send(client, target.getAsPacket()); // Diffuse le bloc complet de caractéristiques du personnage demandé.
+        GAME_SEND_Ow_PACKET(client, target); // Synchronise immédiatement les pods visibles pour cette vue distante.
+    }
+
     public static void GAME_SEND_Rx_PACKET(Player out) {
         String packet = "Rx" + out.getMountXpGive();
         send(out, packet);
@@ -211,6 +219,13 @@ public class SocketManager {
         String packet = "Ow" + perso.getPodUsed() + "|" + perso.getMaxPod();
         send(perso, packet);
 
+    }
+
+    public static void GAME_SEND_Ow_PACKET(GameClient client, Player target) {
+        if (client == null || target == null) { // Bloc logique : aucune donnée si l'un des paramètres est absent.
+            return;
+        }
+        send(client, "Ow" + target.getPodUsed() + "|" + target.getMaxPod()); // Rejoue le paquet de pods pour la cible fournie.
     }
 
     public static void GAME_SEND_OT_PACKET(GameClient out, int id) {
@@ -1055,6 +1070,13 @@ public class SocketManager {
         String packet = perso.parseSpellList();
         send(perso, packet);
 
+    }
+
+    public static void GAME_SEND_SPELL_LIST(GameClient client, Player target) {
+        if (client == null || target == null) { // Bloc logique : vérifie les paramètres pour éviter les paquets fantômes.
+            return;
+        }
+        send(client, target.parseSpellList()); // Reproduit la liste de sorts en précisant la cible exacte.
     }
 
     public static void GAME_SEND_FIGHT_PLAYER_DIE_TO_FIGHT(Fight fight,
