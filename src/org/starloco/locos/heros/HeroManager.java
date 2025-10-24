@@ -169,19 +169,20 @@ public final class HeroManager {
 
         Party party = master.getParty();
 
-        group.heroes.put(master.getId(), master);
+        group.heroes.put(master.getId(), master); // L'ancien maître rejoint désormais la liste des héros actifs.
 
         groups.remove(master.getId());
-        groups.put(candidate.getId(), group);
+        groups.put(candidate.getId(), group); // Le groupe est réindexé sur le nouvel incarné.
 
         for (Player hero : group.heroes.values()) {
-            heroToMaster.put(hero.getId(), candidate.getId());
+            heroToMaster.put(hero.getId(), candidate.getId()); // Réaffecte chaque héros au nouveau maître logique.
         }
 
         if (party != null) {
-            party.setMaster(candidate);
-            candidate.setParty(party);
-            master.setParty(party);
+            party.setMaster(candidate); // Le suivi de groupe doit pointer vers le nouveau contrôleur.
+            party.setChief(candidate); // Met à jour le chef affiché pour corriger l'incohérence côté client.
+            candidate.setParty(party); // Le héros incarné est officiellement membre du groupe.
+            master.setParty(party); // L'ancien maître reste dans la party comme héros virtuel.
         }
 
         candidate.setAccount(master.getAccount());
