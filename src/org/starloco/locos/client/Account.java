@@ -539,6 +539,7 @@ public class Account {
 
     public void disconnect(Player player) {
         player.setChangeName(false); // By Coding Mestre - [FIX] Name changing potion is now working as expected Close #38
+        player.secureLogoutPosition(); // Garantit une position cohérente avant toute écriture base.
         Database.getStatics().getAccountData().setLogged(this.getId(), 0);
         Database.getStatics().getPlayerData().updateAllLogged(this.getId(), 0);
         Database.getStatics().getPlayerData().update(player);
@@ -561,8 +562,12 @@ public class Account {
         this.gameClient = null;
         this.currentIp = "";
 
-        for (Player character : this.getPlayers().values())
+        for (Player character : this.getPlayers().values()) {
+            if (character != null) { // Bloc logique : protège contre une liste contenant des entrées nulles.
+                character.secureLogoutPosition(); // Applique la même sécurisation aux héros et personnages secondaires.
+            }
             Database.getStatics().getPlayerData().update(character);
+        }
 
         player.resetVars();
         this.resetAllChars();
@@ -599,4 +604,10 @@ public class Account {
     public void setSwitchPacketKey(String switchPacketKey) {
         this.switchPacketKey = switchPacketKey;
     }
+
+    /** Notes pédagogiques
+     * - Toujours appeler {@link Player#secureLogoutPosition()} avant {@link Database#getStatics()} pour éviter les positions nulles.
+     * - Le passage dans la boucle des personnages connecte aussi les héros : vérifier qu'ils ne sont pas {@code null}.
+     * - {@link HeroManager#removeAllForMaster(Player)} doit précéder la sauvegarde finale pour libérer les références de groupe.
+     */
 }

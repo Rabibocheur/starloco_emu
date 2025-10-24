@@ -118,6 +118,8 @@ public class Player {
     private boolean away;
     private GameMap curMap;
     private GameCase curCell;
+    private short lastKnownMapId = -1; // Mémorise la dernière carte persistable pour sécuriser la sauvegarde.
+    private int lastKnownCellId = -1; // Mémorise la dernière cellule valide afin de pouvoir y revenir après redémarrage.
     private boolean ready = false;
     private boolean isOnline = false;
     private Party party;
@@ -320,12 +322,13 @@ public class Player {
                 Main.stop("Player1");
                 return;
             } else if (curMap != null) {
-                this.curCell = curMap.getCase(cell);
-                if (curCell == null) {
+                this.curCell = curMap.getCase(cell); // Rattache la cellule enregistrée si elle existe encore sur la carte.
+                if (curCell == null) { // Bloc logique : en cas d'invalidité, replie sur la taverne pour éviter un crash.
                     this.curMap = World.world.getMap((short) 7411);
                     this.curCell = curMap.getCase(311);
                 }
             }
+            this.recordLastKnownLocation(this.curMap, this.curCell); // Synchronise la mémoire de position avec la réalité chargée.
             if (!z.equalsIgnoreCase("")) {
                 for (String str : z.split(",")) {
                     try {
@@ -1286,11 +1289,12 @@ public class Player {
     }
 
     public void setCurCell(GameCase cell) {
-        this.curCell = cell;
-        if (this.isEsclave()) {
+        this.curCell = cell; // Met à jour la cellule courante pour tout traitement en jeu.
+        this.recordLastKnownLocation(this.curMap, cell); // Archive immédiatement la dernière cellule fiable.
+        if (this.isEsclave()) { // Bloc logique : les héros restent virtuels et n'ont pas besoin de diffusion réseau.
             return;
         }
-        HeroManager.getInstance().onPlayerCellUpdated(this, cell);
+        HeroManager.getInstance().onPlayerCellUpdated(this, cell); // Informe le gestionnaire de héros pour conserver l'alignement.
     }
 
     public int get_size() {
@@ -1325,11 +1329,12 @@ public class Player {
     }
 
     public void setCurMap(GameMap curMap) {
-        this.curMap = curMap;
-        if (this.isEsclave()) {
+        this.curMap = curMap; // Enregistre la nouvelle carte active.
+        this.recordLastKnownLocation(curMap, this.curCell); // Mémorise la carte pour un futur éventuel deconnexion brutale.
+        if (this.isEsclave()) { // Bloc logique : un héros ne propage pas d'événement map pour éviter les doublons.
             return;
         }
-        HeroManager.getInstance().onPlayerMapUpdated(this, curMap);
+        HeroManager.getInstance().onPlayerMapUpdated(this, curMap); // Notifie les héros rattachés pour les repositionner virtuellement.
     }
 
     /**
@@ -1340,14 +1345,15 @@ public class Player {
      * @param cell cellule de référence, {@code null} si inconnue.
      */
     public void setVirtualPosition(GameMap map, GameCase cell) {
-        if (this.curCell != null) {
+        if (this.curCell != null) { // Bloc logique : supprime l'ancienne référence pour éviter une présence fantôme.
             this.curCell.removePlayer(this);
         }
-        if (this._gameAction != null) {
+        if (this._gameAction != null) { // Bloc logique : annule une action en cours qui pointerait vers l'ancienne carte.
             this._gameAction = null;
         }
-        this.curMap = map;
-        this.curCell = cell;
+        this.curMap = map; // Actualise la carte mémorisée, même si elle est purement virtuelle.
+        this.curCell = cell; // Actualise la cellule associée pour rester cohérent avec les suivis.
+        this.recordLastKnownLocation(map, cell); // Mémorise immédiatement la dernière position réaliste connue.
     }
 
     /**
@@ -1360,6 +1366,84 @@ public class Player {
         GameMap map = World.world.getMap(mapId);
         GameCase cell = map == null ? null : map.getCase(cellId);
         setVirtualPosition(map, cell);
+    }
+
+    /**
+     * Mémorise la dernière position exploitable pour un futur enregistrement.
+     * <p>
+     * Exemple : après {@code recordLastKnownLocation(map, cell)}, un crash ultérieur
+     * utilisera cette paire pour restaurer la carte courante.<br>
+     * Invariant : {@link #lastKnownMapId} n'est jamais négatif si une carte valide a été fournie.<br>
+     * Effet de bord : aucun envoi réseau, uniquement une mise à jour interne.
+     * </p>
+     *
+     * @param map  carte observée, {@code null} si indisponible.
+     * @param cell cellule observée, {@code null} si inconnue.
+     */
+    private void recordLastKnownLocation(GameMap map, GameCase cell) {
+        if (map != null) { // Bloc logique : sans carte, aucune donnée fiable n'est conservée.
+            this.lastKnownMapId = map.getId();
+            if (cell != null) { // Bloc logique : stocke la cellule uniquement si elle est authentifiée.
+                this.lastKnownCellId = cell.getId();
+            }
+        }
+    }
+
+    /**
+     * Sécurise la position avant toute persistance ou déconnexion.
+     * <p>
+     * Exemple : avant {@code Database.getStatics().getPlayerData().update(player)},
+     * appelez {@code secureLogoutPosition()} pour garantir que la carte renvoyée n'est pas nulle.<br>
+     * Invariant : à la sortie, {@link #getCurMap()} est toujours non {@code null}.<br>
+     * Effets de bord : peut ajuster {@link #curMap} et {@link #curCell} vers une position de repli (savepos ou map par défaut).
+     * </p>
+     */
+    public void secureLogoutPosition() {
+        if (this.curMap != null && this.curCell != null) { // Bloc logique : si les données sont déjà complètes, rien à corriger.
+            this.recordLastKnownLocation(this.curMap, this.curCell);
+            return;
+        }
+
+        GameMap targetMap = this.curMap; // Prépare une référence locale pour clarifier les choix successifs.
+        GameCase targetCell = this.curCell; // Prépare également la cellule visée.
+
+        if (targetMap == null && this.lastKnownMapId >= 0) { // Bloc logique : tente un rappel via la mémoire interne.
+            targetMap = World.world.getMap(this.lastKnownMapId);
+        }
+        if (targetCell == null && targetMap != null && this.lastKnownCellId >= 0) { // Bloc logique : restitue la cellule mémorisée.
+            targetCell = targetMap.getCase(this.lastKnownCellId);
+        }
+
+        if (targetCell == null && targetMap != null) { // Bloc logique : tente d'abord une cellule libre sur la carte retenue.
+            int fallbackCellId = targetMap.getRandomFreeCellId();
+            if (fallbackCellId >= 0) { // Bloc logique : valide seulement si la recherche a abouti.
+                targetCell = targetMap.getCase(fallbackCellId);
+            }
+        }
+
+        if ((targetMap == null || targetCell == null)) { // Bloc logique : recours aux données persistées (savePos) si nécessaire.
+            int[] saved = this.getSavePositionIdentifiers();
+            if (saved != null) { // Bloc logique : seulement si la chaîne est correctement formée.
+                GameMap savedMap = World.world.getMap((short) saved[0]);
+                if (savedMap != null) { // Bloc logique : certains zaaps peuvent avoir été supprimés.
+                    targetMap = targetMap == null ? savedMap : targetMap; // Préserve la carte précédente si déjà retrouvée.
+                    if (targetCell == null) { // Bloc logique : seulement si aucune cellule cohérente n'a été fixée.
+                        targetCell = savedMap.getCase(saved[1]);
+                    }
+                }
+            }
+        }
+
+        if (targetMap == null) { // Bloc logique : replie sur Astrub si toutes les autres tentatives ont échoué.
+            targetMap = World.world.getMap((short) 7411);
+        }
+        if (targetCell == null && targetMap != null) { // Bloc logique : applique la cellule par défaut liée à Astrub.
+            targetCell = targetMap.getCase(311);
+        }
+
+        this.curMap = targetMap; // Applique la carte résolue pour la persistance.
+        this.curCell = targetCell; // Applique la cellule finale (possiblement par défaut).
+        this.recordLastKnownLocation(this.curMap, this.curCell); // Actualise la mémoire afin de refléter ce choix final.
     }
 
     public boolean isAway() {
@@ -6220,4 +6304,11 @@ public class Player {
         }
         return packet;
     }
+
+    /** Notes pédagogiques
+     * - Utiliser {@link #secureLogoutPosition()} juste avant toute sauvegarde pour fiabiliser la carte écrite.
+     * - {@link #recordLastKnownLocation(GameMap, GameCase)} n'enregistre rien si la carte est nulle : vérifier vos appels.
+     * - Les héros virtuels doivent passer par {@link HeroManager#ensureStandalone(Player)} avant {@link #OnJoinGame()}.
+     * - En cas de cellule invalide, la méthode retombe sur {@link #getSavePositionIdentifiers()} avant Astrub.
+     */
 }
