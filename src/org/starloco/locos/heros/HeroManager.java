@@ -29,7 +29,7 @@ public final class HeroManager {
     private final Map<Integer, HeroGroup> groups = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> heroToMaster = new ConcurrentHashMap<>();
     private final Map<Integer, HeroSnapshot> heroSnapshots = new ConcurrentHashMap<>(); // Mémorise la position réelle de chaque héros pour les futures restaurations.
-    private final Map<Integer, Player> activeHeroControl = new ConcurrentHashMap<>(); // Associe un maître au héros actuellement piloté en combat.
+    private final HeroFightController fightController = new HeroFightController(this); // Centralise la logique de contrôle manuel et les transitions pendant les combats.
     private HeroManager() {
     }
 
@@ -70,7 +70,7 @@ public final class HeroManager {
             return HeroOperationResult.error("Ce héros est déjà actif.");
         }
         HeroGroup group = groups.computeIfAbsent(master.getId(), id -> new HeroGroup());
-        activeHeroControl.remove(master.getId()); // Sécurise la carte de contrôle : aucun héros n'est considéré comme actif à l'ajout.
+        fightController.clearManualControl(master); // Sécurise la carte de contrôle : aucun héros n'est considéré comme actif à l'ajout.
         if (group.heroes.size() >= HERO_LIMIT) {
             return HeroOperationResult.error("Vous avez déjà trois héros actifs.");
         }
@@ -105,7 +105,7 @@ public final class HeroManager {
             return HeroOperationResult.error("Ce héros n'est pas actif.");
         }
         heroToMaster.remove(hero.getId());
-        releaseControlFor(master, hero); // Coupe immédiatement la redirection de commandes si le héros était contrôlé.
+        fightController.releaseControlFor(master, hero); // Coupe immédiatement la redirection de commandes si le héros était contrôlé.
         Party party = hero.getParty();
         if (party != null) {
             party.leave(hero);
@@ -115,7 +115,7 @@ public final class HeroManager {
         restoreHeroState(hero); // Replace immédiatement le héros sur sa carte d'origine pour une future connexion directe.
         if (group.heroes.isEmpty()) {
             groups.remove(master.getId());
-            activeHeroControl.remove(master.getId()); // Purge les informations de contrôle quand le groupe disparaît.
+            fightController.clearManualControl(master); // Purge les informations de contrôle quand le groupe disparaît.
         }
         return HeroOperationResult.success("Héros " + hero.getName() + " déconnecté.");
     }
@@ -194,10 +194,7 @@ public final class HeroManager {
             heroToMaster.put(hero.getId(), candidate.getId()); // Réaffecte chaque héros au nouveau maître logique.
         }
 
-        Player transferredControl = activeHeroControl.remove(master.getId()); // Conserve l'état de contrôle manuel lors du changement de maître.
-        if (transferredControl != null) { // Bloc logique : ne réaffecte que si un héros était effectivement piloté.
-            activeHeroControl.put(candidate.getId(), transferredControl); // Le nouveau maître reprend immédiatement la main sur le même héros.
-        }
+        fightController.transferManualControl(master, candidate); // Maintient la continuité de contrôle si un héros était déjà piloté.
 
         if (party != null) { // Bloc logique : synchronise le groupe uniquement si un party existe.
             party.setMaster(candidate); // Le suivi de groupe doit pointer vers le nouveau contrôleur.
@@ -244,7 +241,7 @@ public final class HeroManager {
         if (group == null) {
             return;
         }
-        activeHeroControl.remove(master.getId()); // Reset du suivi de contrôle manuel puisque le groupe est détruit.
+        fightController.clearManualControl(master); // Reset du suivi de contrôle manuel puisque le groupe est détruit.
         List<Player> heroes = new ArrayList<>(group.heroes.values());
         for (Player hero : heroes) {
             heroToMaster.remove(hero.getId());
@@ -271,39 +268,7 @@ public final class HeroManager {
      * @return {@code true} si le tour peut être joué normalement, {@code false} si le serveur doit passer le tour.
      */
     public synchronized boolean prepareTurnControl(Fight fight, Fighter fighter) {
-        if (fighter == null) { // Bloc logique : aucune synchronisation requise sans combattant.
-            return true;
-        }
-        Player actor = fighter.getPersonnage();
-        if (actor == null) { // Bloc logique : les invocations ignorent totalement la logique héros.
-            return true;
-        }
-        if (!isHero(actor)) { // Bloc logique : un joueur standard conserve la main sans traitement supplémentaire.
-            releaseControlFor(actor, null); // Garantit que l'interface revient sur le maître si nécessaire.
-            return true;
-        }
-        Player master = findMaster(actor);
-        if (master == null) { // Bloc logique : sans maître on force le passage de tour.
-            return false;
-        }
-        GameClient client = master.getGameClient();
-        if (client == null || master.getFight() != fight) { // Bloc logique : maîtrise impossible si le client est absent ou sur un autre combat.
-            if (client != null) { // Bloc logique : réinitialise la session si le client répond encore.
-                client.resetControlledFighter(); // Bloc logique : évite de conserver un identifiant obsolète côté réseau.
-            }
-            activeHeroControl.remove(master.getId()); // Supprime toute redirection résiduelle avant de forcer le passage de tour.
-            return false;
-        }
-        activeHeroControl.put(master.getId(), actor);
-        client.setControlledFighterId(fighter.getId()); // Bloc logique : mémorise l'identifiant du combattant contrôlé côté session réseau.
-        SocketManager.GAME_SEND_GIC_PACKET(master, fighter); // Bloc logique : force le focus de l'interface combat sur le héros ciblé.
-        SocketManager.GAME_SEND_GAS_PACKET(master, fighter.getId()); // Bloc logique : actualise l'ordre de jeu client pour ce combattant.
-        SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline côté maître afin d'afficher les PA/PM corrects.
-        SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Bloc logique : synchronise les informations de points de vie et positions du héros actif.
-        SocketManager.GAME_SEND_STATS_PACKET(client, actor); // Met à jour la fiche de caractéristiques côté maître.
-        SocketManager.GAME_SEND_SPELL_LIST(client, actor); // Synchronise la barre de sorts avec ceux du héros actif.
-        SocketManager.GAME_SEND_Ow_PACKET(client, actor); // Actualise les points de pods pour éviter des incohérences d'inventaire.
-        return true;
+        return fightController.prepareTurnControl(fight, fighter); // Délègue la préparation du tour au contrôleur dédié.
     }
 
     /**
@@ -317,18 +282,7 @@ public final class HeroManager {
      * @param fighter combattant dont le tour vient de s'achever.
      */
     public synchronized void finalizeTurnControl(Fighter fighter) {
-        if (fighter == null) { // Bloc logique : rien à restaurer sans combattant défini.
-            return;
-        }
-        Player actor = fighter.getPersonnage();
-        if (actor == null || !isHero(actor)) { // Bloc logique : uniquement pour les héros virtuels.
-            return;
-        }
-        Player master = findMaster(actor);
-        if (master == null) { // Bloc logique : aucune restauration si le maître a disparu.
-            return;
-        }
-        releaseControlFor(master, actor); // Libère l'association maître -> héros si elle correspond au combattant terminé.
+        fightController.finalizeTurnControl(fighter); // Délègue la restitution du contrôle au maître propriétaire.
     }
 
     /**
@@ -343,14 +297,7 @@ public final class HeroManager {
      * @return héros actuellement piloté ou le joueur original si aucun héros n'est ciblé.
      */
     public Player resolveControlledActor(Player sessionPlayer) {
-        if (sessionPlayer == null) { // Bloc logique : aucune résolution sans session.
-            return null;
-        }
-        if (isHero(sessionPlayer)) { // Bloc logique : quand la session incarne déjà un héros, on le retourne directement.
-            return sessionPlayer;
-        }
-        Player hero = activeHeroControl.get(sessionPlayer.getId());
-        return hero != null ? hero : sessionPlayer;
+        return fightController.resolveControlledActor(sessionPlayer); // Centralise la résolution de l'acteur réellement contrôlé.
     }
 
     /**
@@ -378,9 +325,9 @@ public final class HeroManager {
             }
             Player master = World.world.getPlayer(masterId); // Bloc logique : tente d'obtenir le maître connecté pour nettoyer l'interface.
             if (master != null) { // Bloc logique : assure l'arrêt du contrôle manuel côté client si nécessaire.
-                releaseControlFor(master, player);
+                fightController.releaseControlFor(master, player);
             } else { // Bloc logique : supprime tout résidu de contrôle si le maître est hors-ligne.
-                activeHeroControl.remove(masterId);
+                fightController.clearManualControl(masterId);
             }
         }
         Party party = player.getParty();
@@ -479,7 +426,7 @@ public final class HeroManager {
             hero.refreshLife(false); // Harmonise les points de vie affichés avec ceux calculés pendant le combat.
             hero.setReady(true); // Prépare le héros pour un prochain combat afin de ne pas bloquer la phase de placement.
         }
-        releaseControlFor(master, null); // Restaure immédiatement l'interface du maître après la fin du combat.
+        fightController.releaseControlFor(master, null); // Restaure immédiatement l'interface du maître après la fin du combat.
         updatePositionsAfterJoin(master); // Relance les callbacks de synchronisation pour éviter les décalages ultérieurs.
     }
 
@@ -578,38 +525,6 @@ public final class HeroManager {
             builder.append("Aucun");
         }
         return builder.toString();
-    }
-
-    private void releaseControlFor(Player master, Player expectedHero) {
-        if (master == null) { // Bloc logique : sans maître, aucun contrôle n'est à libérer.
-            return;
-        }
-        Player active = activeHeroControl.get(master.getId());
-        if (active == null) { // Bloc logique : rien à faire si aucun héros n'est enregistré.
-            return;
-        }
-        if (expectedHero != null && active.getId() != expectedHero.getId()) { // Bloc logique : ignore si ce n'est pas le héros concerné.
-            return;
-        }
-        activeHeroControl.remove(master.getId());
-        GameClient client = master.getGameClient();
-        if (client == null) { // Bloc logique : aucun envoi si le maître est déjà déconnecté.
-            return;
-        }
-        client.resetControlledFighter(); // Bloc logique : restaure l'identifiant de contrôle par défaut côté session.
-        Fight fight = master.getFight(); // Bloc logique : capture le combat courant pour resynchroniser l'affichage.
-        if (fight != null) { // Bloc logique : envoie les paquets combat uniquement si le maître est toujours en affrontement.
-            Fighter masterFighter = fight.getFighterByPerso(master); // Bloc logique : retrouve le combattant représentant le maître.
-            if (masterFighter != null) { // Bloc logique : évite les paquets incohérents si le maître a quitté le combat.
-                SocketManager.GAME_SEND_GIC_PACKET(master, masterFighter); // Bloc logique : remet le focus de l'UI sur le maître.
-                SocketManager.GAME_SEND_GAS_PACKET(master, masterFighter.getId()); // Bloc logique : confirme l'identifiant du combattant actif.
-                SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline pour refléter les PA/PM du maître.
-                SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Bloc logique : répercute les PV et la position du maître.
-            }
-        }
-        SocketManager.GAME_SEND_STATS_PACKET(client, master); // Réaffiche les caractéristiques du maître côté client.
-        SocketManager.GAME_SEND_SPELL_LIST(client, master); // Restaure la barre de sorts d'origine.
-        SocketManager.GAME_SEND_Ow_PACKET(client, master); // Recalcule les pods visibles pour éviter toute confusion.
     }
 
     private void rememberHeroPosition(Player hero) {
@@ -847,10 +762,10 @@ public final class HeroManager {
 
     /** Notes pédagogiques
      * - Utiliser {@link #getActiveHeroes(Player)} avant un combat pour récupérer l'ordre d'apparition des héros.
-     * - {@link #prepareTurnControl(Fight, Fighter)} déclenche désormais l'envoi ciblé des paquets GIC/GAS/GTL/GTM pour mettre à jour l'UI du maître.
-     * - {@link #finalizeTurnControl(Fighter)} restitue automatiquement l'interface du maître en réinitialisant {@link GameClient#resetControlledFighter()}.
-     * - {@link #resolveControlledActor(Player)} reste un filet de sécurité lorsque l'identifiant de combattant contrôlé n'est plus disponible.
+     * - {@link HeroFightController#prepareTurnControl(Fight, Fighter)} déclenche l'envoi ciblé des paquets GIC/GAS/GTL/GTM pour mettre à jour l'UI du maître.
+     * - {@link HeroFightController#finalizeTurnControl(Fighter)} restitue automatiquement l'interface du maître en réinitialisant {@link GameClient#resetControlledFighter()}.
+     * - {@link HeroFightController#resolveControlledActor(Player)} reste un filet de sécurité lorsque l'identifiant de combattant contrôlé n'est plus disponible.
+     * - {@link HeroFightController#releaseControlFor(Player, Player)} centralise la remise à zéro des paquets et du suivi de contrôle côté session.
      * - Les instantanés ({@link HeroSnapshot}) restent indispensables pour restaurer proprement les positions hors combat.
-     * - {@link #releaseControlFor(Player, Player)} centralise la remise à zéro des paquets et du suivi de contrôle côté session.
      */
 }
