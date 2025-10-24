@@ -4403,8 +4403,15 @@ public class GameClient {
                     sendActions(packet);
                 break;
             case 'C':
-                if (this.player != null)
-                    this.player.sendGameCreate();
+                if (this.player != null) { // Bloc logique : traite uniquement les sessions incarnées.
+                    if (this.isFighting()) { // Bloc logique : ignore le GC pendant un combat pour éviter GC1/GCK.
+                        if (Logging.USE_LOG) { // Bloc logique : trace l'ignorance pour suivi QA.
+                            Logging.getInstance().write("GameClient", "[GC] Ignoré en combat pour joueur=" + this.player.getId());
+                        }
+                        break; // Bloc logique : n'enchaîne pas sur la logique monde.
+                    }
+                    this.player.sendGameCreate(); // Effet de bord : relance la séquence monde hors combat.
+                }
                 break;
             case 'd':
                 showMonsterTarget(packet);
@@ -7876,6 +7883,7 @@ public class GameClient {
      * - {@link #setControlledFighterId(int)} est toujours suivi d'envois GIC/GAS pour maintenir l'UI en phase avec le combattant ciblé.
      * - {@link #resolveFightActor()} bascule d'abord sur l'identifiant persisté avant de recourir au {@link HeroManager}.
      * - {@link #resetControlledFighter()} doit être appelé à chaque fin de tour afin d'éviter des redirections vers un héros inactif.
+     * - Dans {@link #parseGamePacket(String)}, l'instruction « GC » est ignorée si {@link #isFighting()} renvoie {@code true} afin d'éviter toute reconnexion.
      * - Les actions réseau (GA/GAS/GAF) utilisent la valeur retournée par {@link #getControlledFighterId()} pour retrouver le bon {@link Fighter}.
      */
 }

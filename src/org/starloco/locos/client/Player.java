@@ -2028,36 +2028,55 @@ public class Player {
         _showFriendConnection = bool;
     }
 
+    /**
+     * Prépare l'environnement "monde" pour le joueur actuellement incarné.
+     * <p>
+     * Exemple : {@code player.sendGameCreate()} juste après la sélection de personnage.<br>
+     * Cas d'erreur fréquent : appeler cette routine depuis un combat déclenche des paquets GC1/GCK non désirés.<br>
+     * Invariants : la session doit être connectée et hors combat ; {@link #account} reste inchangé en cas d'échec.<br>
+     * Effets de bord : positionne le joueur en ligne, actualise les statistiques et sollicite le chargement de la carte.
+     * </p>
+     */
     public void sendGameCreate() {
-        this.setOnline(true);
-        this.account.setCurrentPlayer(this);
-
-        if (this.account.getGameClient() == null)
+        GameClient client = this.account != null ? this.account.getGameClient() : null; // Bloc logique : récupère la session rattachée au compte.
+        if (client == null) { // Bloc logique : abandonne si le client n'est plus connecté.
             return;
+        }
+        if (client.isFighting()) { // Bloc logique : interdit la séquence de login pendant un combat.
+            if (Logging.USE_LOG) { // Bloc logique : journalise le blocage pour faciliter le suivi QA.
+                Logging.getInstance().write("GameCreate", "[SKIP] Combat actif pour joueur=" + this.getId());
+            }
+            return;
+        }
+        this.setOnline(true); // Effet de bord : le personnage apparaît comme connecté.
+        this.account.setCurrentPlayer(this); // Bloc logique : aligne l'état du compte sur l'incarnation active.
 
-        GameClient client = this.account.getGameClient();
-        SocketManager.GAME_SEND_GAME_CREATE(client, this.getName());
-        SocketManager.GAME_SEND_STATS_PACKET(this);
+        SocketManager.GAME_SEND_GAME_CREATE(client, this.getName()); // Bloc logique : envoie GCK pour initialiser l'interface.
+        SocketManager.GAME_SEND_STATS_PACKET(this); // Effet de bord : synchronise immédiatement les caractéristiques.
         Database.getStatics().getPlayerData().updateLogged(this.id, 1);
         this.verifEquiped();
 
         // Qu'Tan et Ili
-        if (this.needEndFight() == -1) {
+        if (this.needEndFight() == -1) { // Bloc logique : applique la séquence standard hors script de fin de combat.
             SocketManager.GAME_SEND_MAPDATA(client, this.curMap.getId(), this.curMap.getDate(), this.curMap.getKey());
             SocketManager.GAME_SEND_MAP_FIGHT_COUNT(client, this.getCurMap());
-            if (this.getFight() == null) { // debug pano window
+            if (this.getFight() == null) { // Bloc logique : ajoute le joueur sur la carte uniquement hors combat actif.
                 SocketManager.GAME_SEND_ON_EQUIP_ITEM(this.getCurMap(), this);
                 this.curMap.addPlayer(this);
-                
+
             }
         } else {
-            try {
+            try { // Bloc logique : relance le script GI uniquement pour les combats nécessitant une fin différée.
                 client.parsePacket("GI");
-            } catch (InterruptedException e) {
+            } catch (InterruptedException e) { // Bloc logique : journalise l'interruption inattendue du script GI.
                 e.printStackTrace();
             }
         }
-        // class player > sendGameCreate coller ceci 
+        /** Notes pédagogiques (sendGameCreate)
+         * - L'appel est ignoré lorsque {@link GameClient#isFighting()} renvoie {@code true}, évitant GC1/GCK en combat.
+         * - {@link #setOnline(boolean)} et {@link Account#setCurrentPlayer(Player)} ne sont invoqués qu'après validation du client.
+         * - Les paquets de carte ne partent que si {@link #needEndFight()} retourne -1, ce qui protège les fins de combat scriptées.
+         */
     }
 
     public String parseToOa() {

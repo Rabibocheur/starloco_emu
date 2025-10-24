@@ -295,9 +295,27 @@ public class SocketManager {
 
     }
 
+    /**
+     * Diffuse le paquet d'initialisation de jeu (GCK) lorsque le client entre en mode "monde".
+     * <p>
+     * Exemple : {@code GAME_SEND_GAME_CREATE(client, player.getName())} juste après un login complet.<br>
+     * Cas d'erreur fréquent : appeler cette méthode pendant un combat déclenche une reconnexion côté client.<br>
+     * Invariant : ne doit jamais être invoquée si {@link GameClient#isFighting()} vaut {@code true}.<br>
+     * Effet de bord : actualise l'état d'interface en envoyant « GCK » ; aucun autre paquet n'est expédié ici.
+     * </p>
+     *
+     * @param out   session réseau cible (peut être {@code null}).
+     * @param _name nom du personnage affiché par le client.
+     */
     public static void GAME_SEND_GAME_CREATE(GameClient out, String _name) {
-        String packet = "GCK|1|" + _name;
-        send(out, packet);
+        if (out == null) { // Bloc logique : refuse immédiatement sans session valide.
+            return;
+        }
+        if (out.isFighting()) { // Bloc logique : filtre le paquet de login durant un combat actif.
+            return;
+        }
+        String packet = "GCK|1|" + _name; // Bloc logique : compose le message d'initialisation.
+        send(out, packet); // Effet de bord : émet « GCK » pour ouvrir l'interface monde côté client.
 
     }
 
@@ -2840,5 +2858,6 @@ public class SocketManager {
      * - Les paquets "ASK_COMBAT" n'entraînent jamais de rechargement de carte ; ne pas les mélanger avec {@link #GAME_SEND_ASK(GameClient, Player)}.
      * - {@link #buildCombatAskPacket(Player, Fighter)} réutilise la logique de couleurs et d'équipement pour éviter les changements visuels brusques.
      * - Avant d'envoyer un GDM, vérifier systématiquement {@link GameClient#isFighting()} pour ne pas expulser un joueur d'un combat.
+     * - {@link #GAME_SEND_GAME_CREATE(GameClient, String)} ignore les sessions en combat pour bloquer les paquets GCK parasites.
      */
 }
