@@ -26,6 +26,7 @@ public final class HeroManager {
 
     private final Map<Integer, HeroGroup> groups = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> heroToMaster = new ConcurrentHashMap<>();
+    private final Map<Integer, HeroSnapshot> heroSnapshots = new ConcurrentHashMap<>(); // Mémorise la position réelle de chaque héros pour les futures restaurations.
     private HeroManager() {
     }
 
@@ -69,8 +70,8 @@ public final class HeroManager {
         if (group.heroes.size() >= HERO_LIMIT) {
             return HeroOperationResult.error("Vous avez déjà trois héros actifs.");
         }
-        // Supprime tout état résiduel d'une précédente session héros avant rattachement.
-        detachHero(hero);
+        rememberHeroPosition(hero); // Capture la position d'origine pour permettre un retour propre en mode joueur.
+        detachHero(hero); // Supprime tout état résiduel d'une précédente session héros avant rattachement.
         initializeHeroPosition(master, hero);
         group.heroes.put(hero.getId(), hero);
         heroToMaster.put(hero.getId(), master.getId());
@@ -106,6 +107,7 @@ public final class HeroManager {
         }
         detachHero(hero);
         hero.setEsclave(false);
+        restoreHeroState(hero); // Replace immédiatement le héros sur sa carte d'origine pour une future connexion directe.
         if (group.heroes.isEmpty()) {
             groups.remove(master.getId());
         }
@@ -153,6 +155,7 @@ public final class HeroManager {
         if (map == null || cell == null) { // Bloc logique : sans position valide, impossible de repositionner le héros.
             return HeroOperationResult.error("Position du maître inconnue.");
         }
+        rememberHeroPosition(master); // Conserve l'état réel du maître avant qu'il ne devienne héros virtuel.
         GameClient client = master.getGameClient(); // Récupère la connexion afin d'injecter le nouveau personnage.
         if (client == null) { // Bloc logique : protège contre les maîtres déconnectés.
             return HeroOperationResult.error("Client de jeu introuvable.");
@@ -160,6 +163,7 @@ public final class HeroManager {
 
         group.heroes.remove(heroId); // Retire temporairement le candidat de la liste des héros pour l'incarner.
         heroToMaster.remove(heroId); // Supprime le lien maître -> héros afin de le recalculer proprement.
+        heroSnapshots.remove(candidate.getId()); // Purge l'instantané du héros promu pour éviter un retour intempestif à son ancien point.
 
         SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(map, master.getId()); // Efface l'ancien maître côté clients.
         if (master.getCurCell() != null) { // Bloc logique : nettoie la cellule occupée seulement si elle est connue.
@@ -238,7 +242,40 @@ public final class HeroManager {
             }
             detachHero(hero);
             hero.setEsclave(false);
+            restoreHeroState(hero); // Restaure une carte tangible pour éviter toute reconnexion sur un état virtuel.
         }
+    }
+
+    /**
+     * Force la sortie du mode héros pour un personnage lors d'une reconnexion directe.
+     * <p>
+     * Exemple : {@code ensureStandalone(hero)} avant {@link Player#OnJoinGame()} évite les erreurs de carte nulle.<br>
+     * Invariant : à la fin de l'appel, {@link #isHero(Player)} retourne toujours {@code false} pour le joueur fourni.<br>
+     * Effet de bord : le joueur est retiré de son groupe et sa position est restaurée si possible.
+     * </p>
+     *
+     * @param player personnage qui s'apprête à jouer en mode autonome.
+     */
+    public synchronized void ensureStandalone(Player player) {
+        if (player == null) { // Bloc logique : aucune opération n'est réalisée sans cible valide.
+            return;
+        }
+        Integer masterId = heroToMaster.remove(player.getId());
+        if (masterId != null) { // Bloc logique : uniquement si le joueur était bien enregistré comme héros.
+            HeroGroup group = groups.get(masterId);
+            if (group != null) { // Bloc logique : évite les NullPointerException si le groupe est déjà supprimé.
+                group.heroes.remove(player.getId());
+                if (group.heroes.isEmpty()) { // Bloc logique : détruit le groupe si plus aucun héros n'est actif.
+                    groups.remove(masterId);
+                }
+            }
+        }
+        Party party = player.getParty();
+        if (party != null) { // Bloc logique : quitte proprement le groupe pour éviter les doublons à la reconnexion.
+            party.leave(player); // Effet de bord : notifie les autres membres de la sortie du héros.
+        }
+        player.setEsclave(false);
+        restoreHeroState(player); // Replace le personnage sur une carte cohérente avant la reprise de session.
     }
 
     /**
@@ -429,6 +466,49 @@ public final class HeroManager {
         return builder.toString();
     }
 
+    private void rememberHeroPosition(Player hero) {
+        if (hero == null) { // Bloc logique : aucun enregistrement sans cible réelle.
+            return;
+        }
+        HeroSnapshot snapshot = HeroSnapshot.capture(hero);
+        if (snapshot == null) { // Bloc logique : si la capture échoue (carte inconnue), mieux vaut purger tout résidu.
+            heroSnapshots.remove(hero.getId());
+        } else {
+            heroSnapshots.put(hero.getId(), snapshot);
+        }
+    }
+
+    private void restoreHeroState(Player hero) {
+        if (hero == null) { // Bloc logique : sans personnage, aucune restauration n'est nécessaire.
+            return;
+        }
+        HeroSnapshot snapshot = heroSnapshots.remove(hero.getId());
+        if (snapshot != null && snapshot.apply(hero)) { // Bloc logique : si la restauration mémoire fonctionne, inutile d'aller plus loin.
+            return;
+        }
+        reloadSavedPosition(hero); // Fallback : tente une reconstruction à partir des données persistées en base.
+    }
+
+    private void reloadSavedPosition(Player hero) {
+        if (hero == null) { // Bloc logique : protège contre un appel avec référence nulle.
+            return;
+        }
+        int[] saved = hero.getSavePositionIdentifiers();
+        if (saved == null) { // Bloc logique : aucune position persistée à réappliquer.
+            return;
+        }
+        GameMap map = World.world.getMap((short) saved[0]);
+        if (map == null) { // Bloc logique : évite les cartes supprimées ou inaccessibles.
+            return;
+        }
+        GameCase cell = map.getCase(saved[1]);
+        if (cell == null) { // Bloc logique : on prévoit un filet de sécurité si la cellule a été modifiée depuis l'enregistrement.
+            int fallbackCell = map.getRandomFreeCellId();
+            cell = fallbackCell >= 0 ? map.getCase(fallbackCell) : null;
+        }
+        hero.setVirtualPosition(map, cell); // Applique la position logique sans téléportation réseau.
+    }
+
     private void attachToParty(Player master, Player hero) {
         Party party = master.getParty();
         if (party == null) {
@@ -547,6 +627,52 @@ public final class HeroManager {
         }
     }
 
+    /**
+     * Instantané minimal de l'état d'un héros pour le restaurer en mode joueur.
+     */
+    private static final class HeroSnapshot {
+        private final short mapId;
+        private final int cellId;
+        private final int orientation;
+
+        private HeroSnapshot(short mapId, int cellId, int orientation) {
+            this.mapId = mapId;
+            this.cellId = cellId;
+            this.orientation = orientation;
+        }
+
+        static HeroSnapshot capture(Player hero) {
+            if (hero == null) { // Bloc logique : rien à capturer sans référence valide.
+                return null;
+            }
+            GameMap map = hero.getCurMap(); // Recherche la carte actuelle connue du personnage.
+            if (map == null) { // Bloc logique : impossible d'enregistrer une carte inexistante.
+                return null;
+            }
+            GameCase cell = hero.getCurCell(); // Capture la cellule si elle est définie.
+            int storedCell = cell != null ? cell.getId() : -1; // Bloc logique : -1 signale une cellule inconnue.
+            return new HeroSnapshot(map.getId(), storedCell, hero.get_orientation()); // Enregistre l'orientation pour un retour naturel.
+        }
+
+        boolean apply(Player hero) {
+            if (hero == null) { // Bloc logique : sécurise l'appel si le personnage a été déchargé.
+                return false;
+            }
+            GameMap map = World.world.getMap(this.mapId); // Retrouve la carte d'origine via l'identifiant sauvegardé.
+            if (map == null) { // Bloc logique : abandonne si la carte n'existe plus côté serveur.
+                return false;
+            }
+            GameCase cell = this.cellId >= 0 ? map.getCase(this.cellId) : null; // Bloc logique : tente d'abord la cellule exacte.
+            if (cell == null) { // Bloc logique : déclenche un repli si la cellule a disparu ou était inconnue.
+                int fallbackCell = map.getRandomFreeCellId(); // Propose une cellule libre pour éviter les crashs à la connexion.
+                cell = fallbackCell >= 0 ? map.getCase(fallbackCell) : null; // Bloc logique : accepte le fallback uniquement s'il est exploitable.
+            }
+            hero.setVirtualPosition(map, cell); // Restaure la référence logique carte/cellule.
+            hero.set_orientation(this.orientation); // Replace l'orientation initiale pour conserver la cohérence visuelle.
+            return true;
+        }
+    }
+
     private static final class HeroGroup {
         private final Map<Integer, Player> heroes = new LinkedHashMap<>();
     }
@@ -555,5 +681,7 @@ public final class HeroManager {
      * - Utiliser {@link #getActiveHeroes(Player)} avant un combat pour récupérer l'ordre d'apparition des héros.
      * - {@link #restoreGroupAfterFight(Player)} garantit que les héros restent invisibles sur la carte principale.
      * - {@link #findMaster(Player)} permet de sécuriser les accès en resynchronisant un héros avec son maître après un combat.
+     * - {@link #ensureStandalone(Player)} est à appeler juste avant {@link Player#OnJoinGame()} pour éviter les cartes nulles.
+     * - Les instantanés ({@link HeroSnapshot}) n'occupent qu'un stockage léger et sont purgés dès qu'ils sont réappliqués.
      */
 }

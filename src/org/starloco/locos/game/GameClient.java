@@ -34,6 +34,7 @@ import org.starloco.locos.game.action.ExchangeAction;
 import org.starloco.locos.game.action.GameAction;
 import org.starloco.locos.game.world.World;
 import org.starloco.locos.game.world.World.Couple;
+import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.hdv.Hdv;
 import org.starloco.locos.hdv.HdvEntry;
 import org.starloco.locos.hdv.HdvLine;
@@ -844,6 +845,7 @@ public class GameClient {
             if (player != null)
                 if (player.getFight() != null && player.getFight().getFighterByPerso(player) != null) {
                     this.player = player;
+                    HeroManager.getInstance().ensureStandalone(this.player); // Sécurise la reconnection en supprimant tout statut de héros résiduel.
                     this.player.OnJoinGame();
                     return;
                 }
@@ -871,8 +873,10 @@ public class GameClient {
             if (this.player != null) {
                 if(this.player.isDead() == 1 && Config.getInstance().HEROIC)
                     this.getSession().write("BN");
-                else
+                else {
+                    HeroManager.getInstance().ensureStandalone(this.player); // Garantit un état joueur classique avant l'initialisation réseau.
                     this.player.OnJoinGame();
+                }
                 return;
             }
         }

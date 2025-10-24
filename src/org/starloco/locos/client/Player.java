@@ -1150,6 +1150,33 @@ public class Player {
         _savePos = savePos;
     }
 
+    /**
+     * Retourne les identifiants de la position de sauvegarde sous forme brute.
+     * <p>
+     * Exemple : {@code getSavePositionIdentifiers()} peut retourner {@code [7411, 311]} pour une taverne d'Astrub.<br>
+     * Invariant : le tableau retourné contient toujours deux entiers si la chaîne est valide.<br>
+     * Erreur fréquente : une chaîne vide ou mal formatée renvoie {@code null}, à vérifier avant toute téléportation.
+     * </p>
+     *
+     * @return tableau de deux entiers ({@code mapId}, {@code cellId}) ou {@code null} si aucune information exploitable.
+     */
+    public int[] getSavePositionIdentifiers() {
+        if (this._savePos == null || this._savePos.isEmpty()) { // Bloc logique : sans données enregistrées, aucune extraction possible.
+            return null;
+        }
+        String[] parts = this._savePos.split(","); // Découpage minimaliste "map,cell" pour un traitement rapide.
+        if (parts.length < 2) { // Bloc logique : nécessite obligatoirement les deux composantes de la position.
+            return null;
+        }
+        try {
+            int mapId = Integer.parseInt(parts[0].trim()); // Conversion sécurisée de l'identifiant de carte.
+            int cellId = Integer.parseInt(parts[1].trim()); // Conversion sécurisée de l'identifiant de cellule.
+            return new int[]{mapId, cellId}; // Structure compacte afin de limiter l'empreinte mémoire.
+        } catch (NumberFormatException e) { // Bloc logique : la moindre valeur non numérique invalide totalement la position.
+            return null;
+        }
+    }
+
     public long getKamas() {
         return kamas;
     }
