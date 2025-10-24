@@ -4,7 +4,9 @@ import org.starloco.locos.area.map.GameCase;
 import org.starloco.locos.area.map.GameMap;
 import org.starloco.locos.client.Player;
 import org.starloco.locos.client.other.Party;
+import org.starloco.locos.database.Database;
 import org.starloco.locos.common.SocketManager;
+import org.starloco.locos.game.GameClient;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -107,6 +109,103 @@ public final class HeroManager {
             groups.remove(master.getId());
         }
         return HeroOperationResult.success("Héros " + hero.getName() + " déconnecté.");
+    }
+
+    /**
+     * Transfère le contrôle du groupe vers un héros existant.
+     *
+     * @param master maître actuel.
+     * @param heroId identifiant du héros à incarner.
+     * @return résultat de l'opération.
+     */
+    public synchronized HeroOperationResult switchMaster(Player master, int heroId) {
+        if (master == null) {
+            return HeroOperationResult.error("Maître introuvable.");
+        }
+        HeroGroup group = groups.get(master.getId());
+        if (group == null || group.heroes.isEmpty()) {
+            return HeroOperationResult.error("Aucun héros actif.");
+        }
+        Player candidate = group.heroes.get(heroId);
+        if (candidate == null) {
+            return HeroOperationResult.error("Ce héros n'est pas actif.");
+        }
+        if (candidate.getAccount() == null || master.getAccount() == null || candidate.getAccount().getId() != master.getAccount().getId()) {
+            return HeroOperationResult.error("Ce personnage n'appartient pas à votre compte.");
+        }
+        if (candidate.getId() == master.getId()) {
+            return HeroOperationResult.error("Le maître actuel est déjà incarné.");
+        }
+        if (master.getFight() != null) {
+            return HeroOperationResult.error("Impossible de switch pendant un combat.");
+        }
+        if (master.getGameAction() != null || master.getDoAction() || master.getExchangeAction() != null) {
+            return HeroOperationResult.error("Synchronisation en cours, réessayez dans un instant.");
+        }
+        GameMap map = master.getCurMap();
+        GameCase cell = master.getCurCell();
+        if (map == null || cell == null) {
+            return HeroOperationResult.error("Position du maître inconnue.");
+        }
+        GameClient client = master.getGameClient();
+        if (client == null) {
+            return HeroOperationResult.error("Client de jeu introuvable.");
+        }
+
+        group.heroes.remove(heroId);
+        heroToMaster.remove(heroId);
+
+        SocketManager.GAME_SEND_ERASE_ON_MAP_TO_MAP(map, master.getId());
+        if (master.getCurCell() != null) {
+            master.getCurCell().removePlayer(master);
+        }
+
+        int orientation = master.get_orientation();
+
+        master.setEsclave(true);
+        master.setOnline(false);
+        master.setDoAction(false);
+        master.setGameAction(null);
+
+        Party party = master.getParty();
+
+        group.heroes.put(master.getId(), master);
+
+        groups.remove(master.getId());
+        groups.put(candidate.getId(), group);
+
+        for (Player hero : group.heroes.values()) {
+            heroToMaster.put(hero.getId(), candidate.getId());
+        }
+
+        if (party != null) {
+            party.setMaster(candidate);
+            candidate.setParty(party);
+            master.setParty(party);
+        }
+
+        candidate.setAccount(master.getAccount());
+        candidate.setEsclave(false);
+        candidate.setDoAction(false);
+        candidate.setGameAction(null);
+        candidate.setCurMap(map);
+        candidate.setCurCell(cell);
+        candidate.set_orientation(orientation);
+        master.set_orientation(orientation);
+
+        master.getAccount().setCurrentPlayer(candidate);
+        client.switchActivePlayer(candidate);
+
+        Database.getStatics().getPlayerData().updateLogged(master.getId(), 0);
+
+        candidate.OnJoinGame();
+        candidate.sendGameCreate();
+
+        updatePositionsAfterJoin(candidate);
+
+        candidate.sendInformationMessage("Contrôle transféré sur " + candidate.getName() + ".");
+
+        return HeroOperationResult.success("Contrôle transféré sur " + candidate.getName() + ".");
     }
 
     /**

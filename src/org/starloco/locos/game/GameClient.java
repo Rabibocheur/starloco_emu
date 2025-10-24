@@ -104,6 +104,15 @@ public class GameClient {
         return this.player;
     }
 
+    /**
+     * Met à jour le personnage contrôlé sans interrompre la session.
+     *
+     * @param player nouveau personnage actif.
+     */
+    public void switchActivePlayer(Player player) {
+        this.player = player;
+    }
+
     public Account getAccount() {
         return account;
     }
