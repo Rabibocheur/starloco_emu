@@ -25,6 +25,7 @@ import org.starloco.locos.fight.turn.Turn;
 import org.starloco.locos.game.action.GameAction;
 import org.starloco.locos.game.GameClient;
 import org.starloco.locos.kernel.Logging;
+import org.starloco.locos.heros.HeroFightController;
 import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.other.Action;
 import org.starloco.locos.game.world.World;
@@ -1619,8 +1620,9 @@ public class Fight {
       SocketManager.GAME_SEND_GAMETURNSTART_PACKET_TO_FIGHT(this,7,current.getId(),Constant.TIME_BY_TURN, turns);
       current.setCanPlay(true);
       this.turn=new Turn(this,current);
-      if (shouldAutoSkipTurn(current)) { // Bloc logique : déclenche le passage de tour immédiat pour un héros virtuel.
-          TimerWaiter.addNext(() -> this.endTurn(false, current), 200, TimeUnit.MILLISECONDS, TimerWaiter.DataType.FIGHT); // Programme une fin de tour rapide pour laisser le client refléter le changement.
+      HeroFightController heroController = HeroFightController.getInstance(); // Contrôleur dédié aux transferts maître ↔ héros.
+      if (!heroController.handleTurnStart(this, current)) { // Bloc logique : maître indisponible, on saute immédiatement le tour.
+          TimerWaiter.addNext(() -> this.endTurn(false, current), 200, TimeUnit.MILLISECONDS, TimerWaiter.DataType.FIGHT); // Maintient un délai court pour synchroniser l'interface.
           return;
       }
 
@@ -1692,6 +1694,7 @@ public class Fight {
     }
 
     public synchronized void endTurn(boolean onAction, Fighter f) {
+        HeroFightController.getInstance().handleTurnEnd(this, f); // Bloc logique : libère l'association maître ↔ héros à la fin du tour.
         final Fighter current = this.getFighterByOrdreJeu();
         if (current != null)
             if (f == current)
@@ -3259,27 +3262,6 @@ public class Fight {
         }
     }
 
-    /**
-     * Indique si le combattant doit passer son tour instantanément car il s'agit d'un héros serveur.
-     * <p>
-     * Exemple : {@code shouldAutoSkipTurn(fighter)} retourne {@code true} pour les héros ajoutés automatiquement.<br>
-     * Invariant : seules les entités jouables liées à un héros déclenchent un saut automatique.
-     * </p>
-     *
-     * @param fighter combattant courant.
-     * @return {@code true} si le tour doit être sauté automatiquement.
-     */
-    private boolean shouldAutoSkipTurn(Fighter fighter) {
-        if (fighter == null) { // Bloc logique : aucun combattant fourni.
-            return false;
-        }
-        Player player = fighter.getPersonnage(); // Récupère le joueur associé si disponible.
-        if (player == null) { // Bloc logique : les entités non joueurs jouent normalement.
-            return false;
-        }
-        return HeroManager.getInstance().isHero(player); // Les héros virtuels sautent systématiquement leur tour.
-    }
-
     public synchronized void exchangePlace(Player perso, int cell) {
         Fighter fighter = getFighterByPerso(perso);
         assert fighter != null;
@@ -4034,6 +4016,7 @@ public class Fight {
             }
 
             resyncHeroesAfterFight(fighters); // Bloc logique : replace les héros virtuels dans l'état post-combat.
+            HeroFightController.getInstance().releaseForFight(this); // Bloc logique : purge les contextes de contrôle liés à ce combat terminé.
         }
 
     }
@@ -6045,7 +6028,7 @@ public class Fight {
 
     /** Notes pédagogiques
      * - {@link #registerHeroesForMaster(Player, int, Fighter)} insère les héros dès la phase de placement pour garantir leur visibilité.
-     * - {@link #shouldAutoSkipTurn(Fighter)} sécurise le passage de tour automatique des héros côté serveur.
+     * - {@link HeroFightController#handleTurnStart(Fight, Fighter)} synchronise désormais le contrôle manuel des héros.
      * - {@link #resyncHeroesAfterFight(Collection)} replace les héros en mode virtuel à la fin d'un combat.
      */
 }

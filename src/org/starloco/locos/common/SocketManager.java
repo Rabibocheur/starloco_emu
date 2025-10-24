@@ -15,6 +15,7 @@ import org.starloco.locos.game.GameServer;
 import org.starloco.locos.game.world.World;
 import org.starloco.locos.hdv.Hdv;
 import org.starloco.locos.hdv.HdvEntry;
+import org.starloco.locos.heros.HeroFightController;
 import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.job.JobStat;
 import org.starloco.locos.kernel.Config;
@@ -40,13 +41,15 @@ import java.util.Map.Entry;
 public class SocketManager {
 
     public static void send(Player player, String packet) {
-        if (player == null || player.getAccount() == null) {
+        if (player == null || player.getAccount() == null) { // Bloc logique : aucun envoi possible sans destinataire valide.
             return;
         }
-        if (HeroManager.getInstance().isHero(player)) {
+        if (HeroManager.getInstance().isHero(player)) { // Bloc logique : redirection nécessaire vers le maître contrôleur.
+            HeroFightController.getInstance().findMasterForHero(player)
+                    .ifPresent(master -> SocketManager.send(master.getGameClient(), packet)); // Effet : diffuse le paquet via la connexion du maître.
             return;
         }
-        SocketManager.send(player.getGameClient(), packet);
+        SocketManager.send(player.getGameClient(), packet); // Flux standard pour les joueurs directement connectés.
     }
 
     public static void send(GameClient client, String packet) {
