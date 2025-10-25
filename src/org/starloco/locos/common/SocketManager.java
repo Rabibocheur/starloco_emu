@@ -19,6 +19,7 @@ import org.starloco.locos.heros.HeroManager;
 import org.starloco.locos.job.JobStat;
 import org.starloco.locos.kernel.Config;
 import org.starloco.locos.kernel.Constant;
+import org.starloco.locos.kernel.Logging;
 import org.starloco.locos.kernel.Main;
 import org.starloco.locos.area.map.GameCase;
 import org.starloco.locos.area.map.entity.InteractiveObject;
@@ -39,6 +40,8 @@ import java.util.Map.Entry;
 
 public class SocketManager {
 
+    private static final String HERO_PACKET_LOG_CONTEXT = "HeroControl"; // Contexte partagé avec le module héros pour centraliser les journaux réseau.
+
     public static void send(Player player, String packet) {
         if (player == null || player.getAccount() == null) {
             return;
@@ -50,8 +53,38 @@ public class SocketManager {
     }
 
     public static void send(GameClient client, String packet) {
-        if (client != null && client.getSession() != null && !client.getSession().isClosing() && client.getSession().isConnected())
-            client.send(packet);
+        if (client == null) { // Bloc logique : rien à transmettre sans session explicite.
+            return;
+        }
+        if (packet == null) { // Bloc logique : protège contre une chaîne vide susceptible de déclencher une exception.
+            return;
+        }
+        if (client.isFighting()) { // Bloc logique : filtre les paquets dangereux pendant un combat actif.
+            if (packet.startsWith("GDM")) { // Bloc logique : bloque le rechargement de carte pendant un tour de combat.
+                if (Logging.USE_LOG) { // Bloc logique : trace le filtrage pour les retours QA.
+                    Logging.getInstance().write(HERO_PACKET_LOG_CONTEXT, "[FILTER] client.isFighting() = true, GDM suppressed session="
+                            + (client.getAccount() != null ? client.getAccount().getId() : -1));
+                }
+                return; // Effet de bord : conserve l'état actuel de la scène côté client.
+            }
+            if (packet.startsWith("GCK")) { // Bloc logique : empêche l'interface monde de se reconstruire en plein combat.
+                if (Logging.USE_LOG) { // Bloc logique : documente l'éviction pour analyse future.
+                    Logging.getInstance().write(HERO_PACKET_LOG_CONTEXT, "[FILTER] client.isFighting() = true, GCK suppressed session="
+                            + (client.getAccount() != null ? client.getAccount().getId() : -1));
+                }
+                return; // Effet de bord : évite une désincarnation intempestive.
+            }
+        }
+        if (client.getSession() == null) { // Bloc logique : stoppe l'envoi si la session Netty est absente.
+            return;
+        }
+        if (client.getSession().isClosing()) { // Bloc logique : n'envoie rien lorsque la connexion se termine.
+            return;
+        }
+        if (!client.getSession().isConnected()) { // Bloc logique : refuse l'envoi si la socket n'est plus active.
+            return;
+        }
+        client.send(packet); // Effet de bord : propage finalement le paquet vers le client distant.
     }
 
     public static void GAME_SEND_UPDATE_ITEM(Player P, GameObject obj) // Utilisé pour tours bonbon
@@ -178,7 +211,11 @@ public class SocketManager {
 
     public static void GAME_SEND_MINI_ASK_PACKET(GameClient client, Player target, Fighter fighter) {
         try {
-            send(client, buildCombatAskPacket(target, fighter)); // Bloc logique : n'envoie que l'état combat, évitant GC1/GDM.
+            send(client, buildCombatAskPacket(target, fighter)); // Bloc logique : expédie un ASK officiel pour déclencher l'incarnation locale.
+            if (Logging.USE_LOG && client != null) { // Bloc logique : trace l'envoi spécifique au mode combat.
+                Logging.getInstance().write(HERO_PACKET_LOG_CONTEXT, "[ASK] ASK sent in combat mode (incarnation switch only, no map reload) session="
+                        + (client.getAccount() != null ? client.getAccount().getId() : -1) + " target=" + (target != null ? target.getId() : -1));
+            }
         } catch (Exception e) { e.printStackTrace(); System.out.println("Error occured : " + e.getMessage()); }
     }
 
@@ -198,6 +235,7 @@ public class SocketManager {
         packet.append(perso.getId()).append("|"); // Bloc logique : injecte l'identifiant unique du personnage.
         packet.append(perso.getName()).append("|"); // Bloc logique : transmet le nom affiché côté client.
         packet.append(perso.getLevel()).append("|"); // Bloc logique : fournit le niveau pour l'interface de caractéristiques.
+        packet.append(perso.get_align()).append("|"); // Bloc logique : ajoute l'alignement attendu par le client officiel.
         packet.append(perso.getMorphMode() ? -1 : perso.getClasse()).append("|"); // Bloc logique : classe ou -1 si morphose.
         packet.append(perso.getSexe()).append("|"); // Bloc logique : encode le genre pour choisir le sprite.
         packet.append(perso.getGfxId()).append("|"); // Bloc logique : véhicule l'identifiant du sprite principal.
@@ -209,9 +247,10 @@ public class SocketManager {
     }
 
     private static String buildCombatAskPacket(Player perso, Fighter fighter) {
+        // Bloc logique : le paramètre {@code fighter} reste disponible pour de futurs besoins (cellule, initiative) même s'il n'est pas lu ici.
         int color1 = perso.getColor1(); // Bloc logique : reprend la palette primaire pour conserver le skin.
-        int color2 = perso.getColor2();
-        int color3 = perso.getColor3();
+        int color2 = perso.getColor2(); // Bloc logique : conserve la teinte secondaire.
+        int color3 = perso.getColor3(); // Bloc logique : conserve la teinte tertiaire.
         if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION) != null) { // Bloc logique : traite la coiffe vampyro même en combat.
             if (perso.getObjetByPos(Constant.ITEM_POS_MALEDICTION).getTemplate().getId() == 10838) { // Bloc logique : identifie l'équipement imposant le blanc.
                 color1 = 16342021; // Bloc logique : ajuste la première composante couleur.
@@ -219,28 +258,20 @@ public class SocketManager {
                 color3 = 16342021; // Bloc logique : harmonise la troisième composante.
             }
         }
-        int cellId = -1; // Bloc logique : prépare une valeur de repli pour la cellule.
-        if (fighter != null && fighter.getCell() != null) { // Bloc logique : privilégie les informations issues du combat.
-            cellId = fighter.getCell().getId(); // Effet de bord : capture le placement exact du combattant.
-        } else if (perso.getCurCell() != null) { // Bloc logique : retombe sur la dernière cellule connue hors combat.
-            cellId = perso.getCurCell().getId(); // Effet de bord : fournit une position cohérente même sans {@link Fighter}.
-        }
-        StringBuilder packet = new StringBuilder(); // Bloc logique : assemble l'ASK combat dédié.
-        packet.append("ASK_COMBAT|"); // Bloc logique : évite explicitement la séquence de reconnexion classique.
-        packet.append(perso.getId()).append("|");
-        packet.append(perso.getName()).append("|");
-        packet.append(perso.getLevel()).append("|"); // Bloc logique : affiche le niveau exact du combattant actif.
-        packet.append(perso.get_align()).append("|");
-        packet.append(perso.getMorphMode() ? -1 : perso.getClasse()).append("|");
-        packet.append(perso.getSexe()).append("|");
-        packet.append(perso.getGfxId()).append("|");
-        packet.append(color1 == -1 ? "-1" : Integer.toHexString(color1)).append("|");
-        packet.append(color2 == -1 ? "-1" : Integer.toHexString(color2)).append("|");
-        packet.append(color3 == -1 ? "-1" : Integer.toHexString(color3)).append("|");
-        packet.append(cellId).append("|"); // Bloc logique : fournit la cellule cible pour éviter un repositionnement aléatoire.
-        packet.append(perso.get_orientation()).append("|"); // Bloc logique : conserve l'orientation actuelle sur le terrain.
-        packet.append(perso.parseItemToASK()); // Effet de bord : recycle la description d'équipement pour rafraîchir le skin.
-        return packet.toString(); // Bloc logique : livre un paquet autonome, sans GC1/GDM adjoint.
+        StringBuilder packet = new StringBuilder(); // Bloc logique : assemble l'ASK officiel utilisé en combat.
+        packet.append("ASK|"); // Bloc logique : respecte le protocole 1.29 attendu par le client.
+        packet.append(perso.getId()).append("|"); // Bloc logique : reprend l'identifiant du héros incarné.
+        packet.append(perso.getName()).append("|"); // Bloc logique : fournit le nom à afficher dans l'UI.
+        packet.append(perso.getLevel()).append("|"); // Bloc logique : reflète le niveau exact du combattant.
+        packet.append(perso.get_align()).append("|"); // Bloc logique : conserve l'alignement pour la bannière.
+        packet.append(perso.getMorphMode() ? -1 : perso.getClasse()).append("|"); // Bloc logique : encode la classe ou la morphose.
+        packet.append(perso.getSexe()).append("|"); // Bloc logique : précise le genre pour le sprite.
+        packet.append(perso.getGfxId()).append("|"); // Bloc logique : transporte l'identifiant graphique.
+        packet.append(color1 == -1 ? "-1" : Integer.toHexString(color1)).append("|"); // Bloc logique : encode la couleur principale.
+        packet.append(color2 == -1 ? "-1" : Integer.toHexString(color2)).append("|"); // Bloc logique : encode la couleur secondaire.
+        packet.append(color3 == -1 ? "-1" : Integer.toHexString(color3)).append("|"); // Bloc logique : encode la couleur tertiaire.
+        packet.append(perso.parseItemToASK()); // Effet de bord : ajoute l'équipement pour forcer la reconstruction de l'interface.
+        return packet.toString(); // Bloc logique : renvoie un paquet sans GDM/GCK pour laisser le client dans le combat.
     }
 
     public static void GAME_SEND_ALIGNEMENT(GameClient out, int alliID) {
@@ -2855,9 +2886,9 @@ public class SocketManager {
     }
 
     /** Notes pédagogiques
-     * - Les paquets "ASK_COMBAT" n'entraînent jamais de rechargement de carte ; ne pas les mélanger avec {@link #GAME_SEND_ASK(GameClient, Player)}.
-     * - {@link #buildCombatAskPacket(Player, Fighter)} réutilise la logique de couleurs et d'équipement pour éviter les changements visuels brusques.
-     * - Avant d'envoyer un GDM, vérifier systématiquement {@link GameClient#isFighting()} pour ne pas expulser un joueur d'un combat.
+     * - Les paquets "ASK" envoyés via {@link #GAME_SEND_MINI_ASK_PACKET(GameClient, Player, Fighter)} déclenchent l'incarnation sans recharger la carte.
+     * - {@link #buildCombatAskPacket(Player, Fighter)} partage désormais le même format que {@link #buildAskPacket(Player)} pour rester compatible 1.29.
+     * - {@link #send(GameClient, String)} filtre GDM et GCK lorsque {@link GameClient#isFighting()} vaut {@code true} afin d'éviter un retour lobby.
      * - {@link #GAME_SEND_GAME_CREATE(GameClient, String)} ignore les sessions en combat pour bloquer les paquets GCK parasites.
      */
 }
