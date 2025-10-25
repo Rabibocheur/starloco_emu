@@ -1647,14 +1647,40 @@ public class SocketManager {
         send(player, packet);
     }
 
+    /**
+     * Envoie un paquet GA correctement formaté à tous les joueurs de la carte.<br>
+     * Exemple : {@code GAME_SEND_GA_PACKET_TO_MAP(map, "0", 1, "123", "aABC")}
+     * diffusera l'animation de déplacement du joueur {@code 123}.<br>
+     * Cas d'erreur fréquent : transmettre {@code null} entraîne un paquet vide.
+     *
+     * @param map         Carte cible, doit être non {@code null} pour diffuser.
+     * @param gameActionID Identifiant interne du game-action (souvent "0").
+     * @param actionID    Code d'action GA communiqué au client.
+     * @param s1          Source ou paramètre principal du paquet.
+     * @param s2          Paramètres supplémentaires optionnels.
+     */
     public static void GAME_SEND_GA_PACKET_TO_MAP(GameMap map, String gameActionID,
                                                   int actionID, String s1, String s2) {
-        String packet = "GA" + gameActionID + ";" + actionID + ";" + s1;
-        if (!s2.equals(""))
-            packet += ";" + s2;
+        if (map == null) { // Ignore toute diffusion sans carte valide
+            return; // Aucun envoi possible -> sortie immédiate
+        }
+        final String safeActionId = gameActionID == null ? "" : gameActionID; // Préserve une valeur exploitable même vide
+        final String safeSource = s1 == null ? "" : s1; // Empêche les NullPointer côté formatage principal
+        final String safeArgs = s2 == null ? "" : s2; // Garde une chaîne optionnelle cohérente
 
-        for (Player z : map.getPlayers())
-            send(z, packet);
+        StringBuilder packetBuilder = new StringBuilder("GA;"); // Prépare le préfixe GA standard
+        if (!safeActionId.isEmpty()) { // Ajoute l'identifiant de game-action s'il existe
+            packetBuilder.append(safeActionId).append(';'); // Respecte le format GA;id;...
+        }
+        packetBuilder.append(actionID).append(';').append(safeSource); // Colle l'action et la source systématiquement
+        if (!safeArgs.isEmpty()) { // Ajoute les paramètres optionnels uniquement si fournis
+            packetBuilder.append(';').append(safeArgs); // Conserve l'ordre attendu GA;id;action;source;args
+        }
+
+        final String packet = packetBuilder.toString(); // Matérialise la chaîne finale une seule fois
+        for (Player z : map.getPlayers()) { // Parcourt chaque joueur présent sur la carte
+            send(z, packet); // Envoie le paquet formatté via la socket dédiée
+        }
 
     }
 
@@ -2711,4 +2737,10 @@ public class SocketManager {
         String packet = "OrR" + pos;
         send(player, packet);
     }
+    /** Notes pédagogiques
+     * 1. Le format GA impose un point-virgule entre l'identifiant d'action et la source.
+     * 2. Normaliser les valeurs nulles évite les plantages réseau difficiles à diagnostiquer.
+     * 3. Les envois de masse doivent toujours réutiliser la chaîne finale pour réduire la charge GC.
+     * 4. Chaque bloc conditionnel est commenté pour guider la lecture des débutants.
+     */
 }
