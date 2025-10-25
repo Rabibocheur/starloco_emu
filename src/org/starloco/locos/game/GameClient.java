@@ -4320,24 +4320,27 @@ public class GameClient {
     }
 
     private synchronized void sendActions(String packet) {
-        if (this.player.getDoAction()) {
+        if (this.player.getDoAction()) { // Évite l'empilement d'actions si une animation est encore en cours
             SocketManager.GAME_SEND_GA_PACKET(this, "", "0", "", "");
-            return;
+            return; // Sortie immédiate pour préserver l'état client
         }
-        int actionID;
+        final int actionID;
         try {
-            actionID = Integer.parseInt(packet.substring(2, 5));
+            actionID = Integer.parseInt(packet.substring(2, 5)); // Extrait le code GA (ex : déplacement = 001)
         } catch (NumberFormatException e) {
             e.printStackTrace();
-            return;
+            return; // Abandonne si le paquet est mal formé
         }
-        int nextGameActionID = 0;
 
-        if (actions.size() > 0) {
-            //On prend le plus haut GameActionID + 1
-            nextGameActionID = (Integer) (actions.keySet().toArray()[actions.size() - 1]) + 1;
+        final GameMap currentMap = this.player == null ? null : this.player.getCurMap(); // Récupère la carte active si disponible
+        int nextGameActionID;
+        if (currentMap != null) { // Utilise le compteur partagé de la carte pour un identifiant global
+            nextGameActionID = currentMap.generateNextActionId();
+        } else { // Revient sur l'ancien mécanisme local si aucune carte n'est connue (cas de sécurité)
+            nextGameActionID = actions.isEmpty() ? 1 : (Integer) (actions.keySet().toArray()[actions.size() - 1]) + 1; // Garantit un identifiant strictement positif
         }
-        GameAction GA = new GameAction(nextGameActionID, actionID, packet);
+
+        GameAction GA = new GameAction(nextGameActionID, actionID, packet); // Construit l'action serveur avec l'identifiant unique
 
         switch (actionID) {
             case 1://Deplacement
@@ -7614,13 +7617,13 @@ public class GameClient {
     }
 
     public void addAction(GameAction GA) {
-        actions.put(GA.id, GA);
-        if (GA.actionId == 1)
-            walk = true;
+        actions.put(GA.id, GA); // Mémorise l'action en attente d'accusé réception côté client
+        if (GA.actionId == 1) // Identifie les déplacements pour gérer l'état "walk"
+            walk = true; // Marque le joueur comme en mouvement tant que l'action n'est pas terminée
 
-        if (Main.modDebug)
+        if (Main.modDebug) // Facilite le suivi en environnement de test
             World.world.logger.error("Game > Create action id : " + GA.id);
-        if (Main.modDebug)
+        if (Main.modDebug) // Offre une trace du paquet source pour diagnostiquer les anomalies
             World.world.logger.error("Game > Packet : " + GA.packet);
     }
 
@@ -7733,4 +7736,11 @@ public class GameClient {
             e.printStackTrace();
         }
     }
+
+    /** Notes pédagogiques */
+    /*
+     * - Les identifiants d'actions sont désormais générés par la carte pour éviter les doublons inter-joueurs.
+     * - La méthode {@link #sendActions(String)} retombe sur un compteur local uniquement en cas d'urgence (joueur sans carte).
+     * - Le flag "walk" reste mis à jour sur les actions de déplacement afin de préserver la logique réseau existante.
+     */
 }

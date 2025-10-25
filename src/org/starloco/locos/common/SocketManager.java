@@ -1649,15 +1649,15 @@ public class SocketManager {
 
     /**
      * Envoie un paquet GA correctement formaté à tous les joueurs de la carte.<br>
-     * Exemple : {@code GAME_SEND_GA_PACKET_TO_MAP(map, "0", 1, "123", "aABC")}
-     * diffusera l'animation de déplacement du joueur {@code 123}.<br>
-     * Cas d'erreur fréquent : transmettre {@code null} entraîne un paquet vide.
+     * Exemple : {@code GAME_SEND_GA_PACKET_TO_MAP(map, "42", 1, "123", "aABC")} diffusera l'animation de
+     * déplacement du joueur {@code 123} en utilisant l'identifiant de carte {@code 42}.<br>
+     * Cas d'erreur fréquent : oublier d'appeler {@code GameMap.generateNextActionId()} provoque des collisions d'animation.
      *
-     * @param map         Carte cible, doit être non {@code null} pour diffuser.
-     * @param gameActionID Identifiant interne du game-action (souvent "0").
-     * @param actionID    Code d'action GA communiqué au client.
-     * @param s1          Source ou paramètre principal du paquet.
-     * @param s2          Paramètres supplémentaires optionnels.
+     * @param map          Carte cible, doit être non {@code null} pour diffuser.
+     * @param gameActionID Identifiant interne du game-action (désormais unique par carte).
+     * @param actionID     Code d'action GA communiqué au client.
+     * @param s1           Source ou paramètre principal du paquet.
+     * @param s2           Paramètres supplémentaires optionnels.
      */
     public static void GAME_SEND_GA_PACKET_TO_MAP(GameMap map, String gameActionID,
                                                   int actionID, String s1, String s2) {
@@ -2739,8 +2739,9 @@ public class SocketManager {
     }
     /** Notes pédagogiques
      * 1. Le format GA impose un point-virgule entre l'identifiant d'action et la source.
-     * 2. Normaliser les valeurs nulles évite les plantages réseau difficiles à diagnostiquer.
-     * 3. Les envois de masse doivent toujours réutiliser la chaîne finale pour réduire la charge GC.
-     * 4. Chaque bloc conditionnel est commenté pour guider la lecture des débutants.
+     * 2. L'identifiant transmis doit provenir de {@link GameMap#generateNextActionId()} afin d'éviter les collisions réseau.
+     * 3. Normaliser les valeurs nulles évite les plantages réseau difficiles à diagnostiquer.
+     * 4. Les envois de masse doivent toujours réutiliser la chaîne finale pour réduire la charge GC.
+     * 5. Chaque bloc conditionnel est commenté pour guider la lecture des débutants.
      */
 }
