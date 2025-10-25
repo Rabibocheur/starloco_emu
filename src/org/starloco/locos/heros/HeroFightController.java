@@ -186,12 +186,8 @@ final class HeroFightController {
             return false;
         }
         client.setControlledFighterId(fighter.getId()); // Effet de bord : informe immédiatement la session du combattant actif.
-        SocketManager.GAME_SEND_GIC_PACKET(master, fighter); // Bloc logique : centre l'interface combat sur le héros ciblé avant les stats.
         sendIncarnationHandshake(client, actor, fighter); // Effet de bord : notifie le client de l'incarnation et renvoie les stats nécessaires.
         activeHeroControl.put(master.getId(), actor); // Bloc logique : mémorise quel héros est désormais piloté.
-        SocketManager.GAME_SEND_GAS_PACKET(master, fighter.getId()); // Bloc logique : actualise l'ordre de jeu côté client.
-        SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline pour refléter PA/PM à jour.
-        SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Bloc logique : synchronise PV et positions du combattant.
         if (Logging.USE_LOG) { // Bloc logique : confirme l'ordre d'envoi des paquets pour relecture rapide.
             Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Switch confirmé hero=" + actor.getId() + " fighter="
                     + fighter.getId());
@@ -280,10 +276,15 @@ final class HeroFightController {
         if (fight != null) { // Bloc logique : renvoie les paquets combat uniquement si le maître est toujours engagé.
             Fighter masterFighter = fight.getFighterByPerso(master);
             if (masterFighter != null) { // Bloc logique : évite les paquets incohérents si le maître a quitté le combat.
-                SocketManager.GAME_SEND_GIC_PACKET(master, masterFighter); // Bloc logique : remet le focus combat sur le maître.
+                SocketManager.GAME_SEND_GIC_PACKET(master, masterFighter, true); // Bloc logique : remet explicitement le focus combat sur le maître.
                 SocketManager.GAME_SEND_GAS_PACKET(master, masterFighter.getId()); // Bloc logique : confirme l'identifiant actif.
                 SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline PA/PM.
-                SocketManager.GAME_SEND_GTM_PACKET(master, fight); // Bloc logique : synchronise PV et positions.
+                GameClient masterClient = master.getGameClient(); // Bloc logique : sécurise l'accès à la session pour le GTM ciblé.
+                if (masterClient != null) { // Bloc logique : envoie le GTM uniquement si le socket maître est disponible.
+                    SocketManager.GAME_SEND_GTM_PACKET(masterClient, fight, masterFighter); // Bloc logique : synchronise PV et positions en marquant le maître local.
+                    SocketManager.GAME_SEND_GTR_PACKET(masterClient, masterFighter.getId()); // Bloc logique : assure le recentrage caméra sur le maître.
+                    SocketManager.GAME_SEND_Im_PACKET(masterClient, "1201"); // Bloc logique : répète le feedback « C'est votre tour » lors du retour sur le maître.
+                }
             }
         }
         if (Logging.USE_LOG) { // Bloc logique : confirme le retour d'incarnation avec l'identifiant actif.
@@ -398,36 +399,76 @@ final class HeroFightController {
             if (resolvedFighter == null && targetFight != null) { // Bloc logique : retombe sur le combattant lié au personnage si absent.
                 resolvedFighter = targetFight.getFighterByPerso(target); // Effet de bord : récupère l'identifiant pour préparer GTS.
             }
-            if (resolvedFighter != null) { // Bloc logique : envoie GIC uniquement si un combattant valide est identifié.
-                SocketManager.GAME_SEND_GIC_PACKET(client, resolvedFighter); // Effet de bord : informe immédiatement le client du combattant sélectionné.
-            }
-            SocketManager.GAME_SEND_GTL_PACKET(client, targetFight); // Bloc logique : partage la timeline complète avant toute mise à jour de stats.
-            SocketManager.GAME_SEND_GTM_PACKET(client, targetFight); // Bloc logique : synchronise les PV/PA/PM de tous les combattants.
-            SocketManager.GAME_SEND_MINI_ASK_PACKET(client, target, resolvedFighter); // Effet de bord : émet un ASK officiel ciblant le combattant actif.
-            SocketManager.GAME_SEND_STATS_PACKET(client, target); // Bloc logique : actualise PV/PA/PM visibles sans toucher à la map (envoie As puis Ow).
-            SocketManager.GAME_SEND_SPELL_LIST(client, target); // Bloc logique : synchronise la barre de sorts avec le héros en cours.
-            if (resolvedFighter != null) { // Bloc logique : finalise la séquence combat uniquement si le combattant est défini.
-                SocketManager.GAME_SEND_GAS_PACKET(client, resolvedFighter.getId()); // Effet de bord : active les actions côté client pour le bon combattant.
-                int elapsed = targetFight.getElapsedFightTime(); // Bloc logique : calcule le temps écoulé pour aligner le timer.
-                int turnCount = targetFight.getTurnsCount(); // Bloc logique : transmet le numéro de tour actuel.
-                SocketManager.GAME_SEND_GAMETURNSTART_PACKET(client, resolvedFighter.getId(), elapsed, turnCount); // Effet de bord : met à jour la timeline du client.
-            }
-            if (Logging.USE_LOG) { // Bloc logique : consigne la séquence envoyée pour diagnostic.
-                int accountId = client.getAccount() != null ? client.getAccount().getId() : -1; // Bloc logique : protège l'accès si l'association compte n'est plus définie.
-                int fighterId = resolvedFighter != null ? resolvedFighter.getId() : -1; // Bloc logique : fournit un identifiant clair même en cas d'absence de combattant.
-                Logging.getInstance().write(HERO_LOG_CONTEXT, "[HANDSHAKE] Combat session=" + accountId + " cible=" + target.getId() + " fighter=" + fighterId); // Effet de bord : laisse une trace complète pour les QA.
-                Logging.getInstance().write(HERO_LOG_CONTEXT, "combat UI refresh packet sequence sent for hero " + target.getId()); // Effet de bord : log dédié pour vérifier la séquence UI.
-            }
+            sendCombatPackets(client, target, targetFight, resolvedFighter); // Effet de bord : diffuse la séquence combat en marquant le focus local si présent.
             return; // Bloc logique : interrompt la méthode après les paquets combat dédiés.
         }
-        SocketManager.GAME_SEND_ASK(client, target); // Effet de bord : annonce au client l'identité et l'équipement du personnage actif hors combat.
-        SocketManager.GAME_SEND_STATS_PACKET(client, target); // Bloc logique : actualise la fiche de caractéristiques visible.
-        SocketManager.GAME_SEND_SPELL_LIST(client, target); // Effet de bord : synchronise la barre de sorts sur l'incarnation courante.
-        SocketManager.GAME_SEND_Ow_PACKET(client, target); // Bloc logique : recalcule l'inventaire (pods) pour l'affichage.
+        sendMapPackets(client, target); // Bloc logique : applique la séquence standard hors combat.
         if (Logging.USE_LOG) { // Bloc logique : trace l'envoi pour faciliter les diagnostics QA.
             int accountId = client.getAccount() != null ? client.getAccount().getId() : -1; // Bloc logique : protège l'accès si l'association compte n'est plus définie.
             Logging.getInstance().write(HERO_LOG_CONTEXT, "[HANDSHAKE] Session=" + accountId + " cible=" + target.getId());
         }
+    }
+
+    /**
+     * Diffuse la séquence complète de paquets combat pour aligner l'interface sur un combattant donné.
+     * <p>
+     * Exemple : {@code sendCombatPackets(client, hero, fight, fighter)} lors du début de tour d'un héros.<br>
+     * Cas d'erreur : passer un {@code fight} nul coupe immédiatement la séquence pour éviter un envoi incohérent.<br>
+     * Effets de bord : envoie GIC/GTL/GTM/GAS/GTS, GTR et Im1201 lorsque le combattant est défini.
+     * </p>
+     *
+     * @param client          session réseau connectée au maître.
+     * @param target          personnage incarné par le client.
+     * @param fight           combat en cours.
+     * @param resolvedFighter combattant correspondant à l'incarnation ; peut être {@code null} si le focus est inconnu.
+     */
+    private void sendCombatPackets(GameClient client, Player target, Fight fight, Fighter resolvedFighter) {
+        if (client == null || fight == null) { // Bloc logique : refuse l'envoi sans session ni combat.
+            return;
+        }
+        boolean hasFocus = resolvedFighter != null; // Bloc logique : mémorise la présence d'un combattant à marquer localement.
+        if (hasFocus) { // Bloc logique : informe le client de l'entité qu'il doit piloter.
+            SocketManager.GAME_SEND_GIC_PACKET(client, resolvedFighter, true); // Effet de bord : marque explicitement le combattant comme local.
+            SocketManager.GAME_SEND_GTR_PACKET(client, resolvedFighter.getId()); // Effet de bord : recadre la caméra sur la bonne entité.
+        }
+        SocketManager.GAME_SEND_GTL_PACKET(client, fight); // Bloc logique : rafraîchit la timeline complète.
+        SocketManager.GAME_SEND_GTM_PACKET(client, fight, resolvedFighter); // Bloc logique : synchronise les barres PV/PA/PM en marquant le focus local si nécessaire.
+        SocketManager.GAME_SEND_MINI_ASK_PACKET(client, target, resolvedFighter); // Bloc logique : valide l'incarnation côté client sans recharger la carte.
+        SocketManager.GAME_SEND_STATS_PACKET(client, target); // Bloc logique : actualise PV/PA/PM visibles.
+        SocketManager.GAME_SEND_SPELL_LIST(client, target); // Bloc logique : met à jour la barre de sorts.
+        if (hasFocus) { // Bloc logique : n'envoie la suite que si un combattant précis est identifié.
+            SocketManager.GAME_SEND_GAS_PACKET(client, resolvedFighter.getId()); // Effet de bord : active les actions pour le bon combattant.
+            int elapsed = fight.getElapsedFightTime(); // Bloc logique : calcule le temps écoulé pour synchroniser le timer.
+            int turnCount = fight.getTurnsCount(); // Bloc logique : transmet le numéro de tour courant.
+            SocketManager.GAME_SEND_GAMETURNSTART_PACKET(client, resolvedFighter.getId(), elapsed, turnCount); // Effet de bord : déclenche le chronomètre côté client.
+            SocketManager.GAME_SEND_Im_PACKET(client, "1201"); // Effet de bord : affiche le message « C'est votre tour ».
+        }
+        if (Logging.USE_LOG) { // Bloc logique : consigne la séquence envoyée pour diagnostic.
+            int accountId = client.getAccount() != null ? client.getAccount().getId() : -1; // Bloc logique : protège l'accès si l'association compte n'est plus définie.
+            int fighterId = hasFocus ? resolvedFighter.getId() : -1; // Bloc logique : fournit un identifiant clair même en absence de combattant.
+            Logging.getInstance().write(HERO_LOG_CONTEXT, "[HANDSHAKE] Combat session=" + accountId + " cible=" + target.getId() + " fighter=" + fighterId); // Effet de bord : laisse une trace complète pour les QA.
+        }
+    }
+
+    /**
+     * Expédie la séquence d'incarnation standard utilisée hors combat.
+     * <p>
+     * Exemple : {@code sendMapPackets(client, master)} après la fin d'un combat pour restaurer l'affichage habituel.<br>
+     * Cas d'erreur : fournir un {@code client} nul interrompra silencieusement l'envoi.<br>
+     * Effets de bord : envoie ASK, Stats, Spells et Ow comme lors d'un changement de personnage classique.
+     * </p>
+     *
+     * @param client session réseau ciblée.
+     * @param target personnage actif dont il faut afficher les informations.
+     */
+    private void sendMapPackets(GameClient client, Player target) {
+        if (client == null || target == null) { // Bloc logique : évite toute tentative d'envoi sans session ou cible valide.
+            return;
+        }
+        SocketManager.GAME_SEND_ASK(client, target); // Effet de bord : annonce l'identité et l'équipement du personnage actif hors combat.
+        SocketManager.GAME_SEND_STATS_PACKET(client, target); // Bloc logique : actualise la fiche de caractéristiques visible.
+        SocketManager.GAME_SEND_SPELL_LIST(client, target); // Effet de bord : synchronise la barre de sorts sur l'incarnation courante.
+        SocketManager.GAME_SEND_Ow_PACKET(client, target); // Bloc logique : recalcule l'inventaire (pods) pour l'affichage.
     }
 
     /** Notes pédagogiques
@@ -438,5 +479,7 @@ final class HeroFightController {
      * - {@link #engageTemporaryIncarnation(Player, Player)} force le client à incarner un héros pendant son tour.
      * - {@link #restorePrimaryIncarnation(Player)} garantit le retour automatique sur le maître en fin de tour ou lors d'un nettoyage.
      * - {@link #clearManualControl(Player)} reste utile pour purger tout résidu lors de l'ajout ou du retrait d'un héros.
+     * - {@link #sendCombatPackets(GameClient, Player, Fight, Fighter)} orchestre GIC/GTL/GTM/GAS/GTS + GTR/Im1201 pour le combattant local.
+     * - {@link #sendMapPackets(GameClient, Player)} renvoie la séquence ASK/Stats/Spells/Ow classique hors combat.
      */
 }
