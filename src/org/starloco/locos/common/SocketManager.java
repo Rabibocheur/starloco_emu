@@ -792,6 +792,24 @@ public class SocketManager {
 
     }
 
+    /**
+     * Variante orientée session permettant d'envoyer un message système même lorsque le joueur incarne un héros.
+     * <p>
+     * Exemple : {@code GAME_SEND_Im_PACKET(client, "1201") } pour afficher « C'est votre tour » au maître incarné en héros.<br>
+     * Cas d'erreur fréquent : oublier de vérifier {@code client != null}; la méthode ignore alors simplement l'appel.<br>
+     * Effet de bord : aucun, le paquet est identique à celui envoyé via {@link #GAME_SEND_Im_PACKET(Player, String)}.
+     * </p>
+     *
+     * @param client session réseau destinataire.
+     * @param str    identifiant ou contenu du message (ex : {@code "1201"}).
+     */
+    public static void GAME_SEND_Im_PACKET(GameClient client, String str) {
+        if (client == null) { // Bloc logique : pas de message sans socket actif.
+            return;
+        }
+        send(client, "Im" + str); // Effet de bord : envoie directement le message à la session ciblée.
+    }
+
     public static void GAME_SEND_ILS_PACKET(Player out, int i) {
         String packet = "ILS" + i;
         send(out, packet);
@@ -901,10 +919,32 @@ public class SocketManager {
         for (Fighter p : fight.getFighters(3)) {
             if (p.getCell() == null)
                 continue;
-            packet.append(p.getId()).append(";").append(p.getCell().getId()).append(";1|");
+            appendGicSelectionSegment(packet, p, false); // Bloc logique : conserve le format d'origine pour chaque combattant.
         }
         send(out, packet.toString());
 
+    }
+
+    /**
+     * Construit la portion GIC correspondant à un combattant donné, avec un indicateur optionnel "local".
+     * <p>
+     * Exemple : {@code appendGicSelectionSegment(builder, fighter, true)} ajoute {@code ;1} final pour indiquer un focus local.<br>
+     * Cas d'erreur fréquent : oublier de vérifier {@link Fighter#getCell()} provoque un {@code NullPointerException} ; la méthode
+     * suppose donc que la cellule a déjà été validée par l'appelant.<br>
+     * Invariant : le séparateur « | » est toujours ajouté en fin de segment pour rester compatible avec le protocole officiel.
+     * </p>
+     *
+     * @param builder    tampon dans lequel le segment est ajouté.
+     * @param fighter    combattant ciblé ; doit posséder une cellule non nulle.
+     * @param localFocus {@code true} si le combattant doit être marqué comme joueur local côté client.
+     */
+    private static void appendGicSelectionSegment(StringBuilder builder, Fighter fighter, boolean localFocus) {
+        builder.append(fighter.getId()).append(";"); // Bloc logique : ajoute l'identifiant unique du combattant.
+        builder.append(fighter.getCell().getId()).append(";1"); // Bloc logique : encode la cellule ainsi que l'état de sélection.
+        if (localFocus) { // Bloc logique : ajoute un drapeau supplémentaire pour signaler un contrôle manuel local.
+            builder.append(";1");
+        }
+        builder.append("|"); // Bloc logique : clôt le segment conformément au protocole GIC.
     }
 
     /**
@@ -918,6 +958,22 @@ public class SocketManager {
      * @param fighter combattant sélectionné.
      */
     public static void GAME_SEND_GIC_PACKET(Player out, Fighter fighter) {
+        GAME_SEND_GIC_PACKET(out, fighter, false); // Bloc logique : délègue à la variante détaillée sans marquage local explicite.
+    }
+
+    /**
+     * Variante détaillée permettant de marquer explicitement un combattant comme contrôlé localement.
+     * <p>
+     * Exemple : {@code GAME_SEND_GIC_PACKET(master, heroFighter, true)} pendant le tour d'un héros pour déclencher la caméra locale.<br>
+     * Erreur fréquente : appeler avec {@code fighter.getCell() == null}; le client refusera alors de mettre à jour l'interface.<br>
+     * Effet de bord : aucun paquet n'est envoyé si la session associée n'est pas en combat actif.
+     * </p>
+     *
+     * @param out        joueur maître destinataire du paquet.
+     * @param fighter    combattant qui devient la cible de contrôle.
+     * @param localFocus {@code true} pour ajouter le drapeau "joueur local" dans le segment GIC.
+     */
+    public static void GAME_SEND_GIC_PACKET(Player out, Fighter fighter, boolean localFocus) {
         if (out == null || fighter == null) { // Bloc logique : impossible de construire un paquet sans cible valide.
             return;
         }
@@ -928,9 +984,10 @@ public class SocketManager {
         if (client == null) { // Bloc logique : évite toute tentative d'envoi si le joueur vient de se déconnecter.
             return;
         }
-        StringBuilder packet = new StringBuilder("GIC|"); // Bloc logique : prépare le format GIC standard.
-        packet.append(fighter.getId()).append(";").append(fighter.getCell().getId()).append(";1|"); // Bloc logique : encode l'identifiant, la cellule et le drapeau de sélection.
-        send(client, packet.toString()); // Bloc logique : expédie immédiatement le paquet au joueur ciblé en ignorant le statut de héros.
+        if (!client.isFighting()) { // Bloc logique : ne transmet pas ce paquet spécialisé hors combat pour préserver les animations.
+            return;
+        }
+        sendGicPacket(client, fighter, localFocus); // Effet de bord : mutualise la construction avec la variante GameClient.
     }
 
     /**
@@ -946,15 +1003,50 @@ public class SocketManager {
      * @param fighter combattant désormais actif.
      */
     public static void GAME_SEND_GIC_PACKET(GameClient client, Fighter fighter) {
+        GAME_SEND_GIC_PACKET(client, fighter, false); // Bloc logique : conserve la compatibilité en gardant le format historique par défaut.
+    }
+
+    /**
+     * Variante orientée session qui ajoute éventuellement le drapeau local pour piloter les caméras de combat.
+     * <p>
+     * Exemple : {@code GAME_SEND_GIC_PACKET(client, fighter, true)} après {@link GameClient#setControlledFighterId(int)}.<br>
+     * Cas d'erreur : oublier de vérifier {@link Fighter#getCell()} avant l'appel génère un paquet incomplet côté client.<br>
+     * Effet de bord : désactive automatiquement l'envoi si la session n'est plus considérée en combat.
+     * </p>
+     *
+     * @param client     session réseau destinataire.
+     * @param fighter    combattant sélectionné.
+     * @param localFocus {@code true} pour marquer ce combattant comme joueur local.
+     */
+    public static void GAME_SEND_GIC_PACKET(GameClient client, Fighter fighter, boolean localFocus) {
         if (client == null || fighter == null) { // Bloc logique : coupe l'envoi si la session ou le combattant est manquant.
             return;
         }
-        if (fighter.getCell() == null) { // Bloc logique : évite un paquet invalide lorsque la cellule n'est pas définie.
+        if (!client.isFighting()) { // Bloc logique : préserve les animations d'exploration en ignorant ce paquet hors combat.
             return;
         }
-        StringBuilder packet = new StringBuilder("GIC|"); // Bloc logique : construit le message dans le format officiel.
-        packet.append(fighter.getId()).append(";").append(fighter.getCell().getId()).append(";1|"); // Bloc logique : insère identifiant, cellule et indicateur de sélection.
-        send(client, packet.toString()); // Effet de bord : notifie immédiatement le client de la nouvelle incarnation.
+        sendGicPacket(client, fighter, localFocus); // Effet de bord : délègue la construction effective du paquet.
+    }
+
+    /**
+     * Factorise la construction du paquet GIC pour les variantes Player et GameClient.
+     * <p>
+     * Exemple : {@code sendGicPacket(client, fighter, true)} produit {@code GIC|id;cell;1;1|}.<br>
+     * Cas d'erreur : la méthode suppose que {@code fighter.getCell()} a été validée en amont ; aucune vérification supplémentaire n'est faite ici.<br>
+     * Invariant : la chaîne résultante commence toujours par « GIC| » conformément au protocole.
+     * </p>
+     *
+     * @param client     session réseau actuellement connectée.
+     * @param fighter    combattant dont on veut forcer la sélection.
+     * @param localFocus {@code true} si le combattant doit être marqué local.
+     */
+    private static void sendGicPacket(GameClient client, Fighter fighter, boolean localFocus) {
+        if (fighter.getCell() == null) { // Bloc logique : abandonne silencieusement si la cellule n'est pas définie.
+            return;
+        }
+        StringBuilder packet = new StringBuilder("GIC|"); // Bloc logique : prépare le préfixe commun à tous les paquets GIC.
+        appendGicSelectionSegment(packet, fighter, localFocus); // Bloc logique : insère les données du combattant avec ou sans drapeau local.
+        send(client, packet.toString()); // Effet de bord : transmet immédiatement le paquet construit.
     }
 
     public static void GAME_SEND_GS_PACKET_TO_FIGHT(Fight fight, int teams) {
@@ -987,6 +1079,13 @@ public class SocketManager {
     }
 
     public static void GAME_SEND_GTL_PACKET(Player out, Fight fight) {
+        if (out == null || fight == null) { // Bloc logique : valide l'entrée pour éviter un paquet vide.
+            return;
+        }
+        GameClient client = out.getGameClient(); // Bloc logique : récupère la session effective du joueur maître.
+        if (client != null && !client.isFighting()) { // Bloc logique : n'envoie pas la timeline combat lorsque le client explore simplement la carte.
+            return;
+        }
         String packet = fight.getGTL();
         send(out, packet);
 
@@ -1006,6 +1105,9 @@ public class SocketManager {
      */
     public static void GAME_SEND_GTL_PACKET(GameClient client, Fight fight) {
         if (client == null || fight == null) { // Bloc logique : valide les paramètres pour sécuriser l'appel côté débutant.
+            return;
+        }
+        if (!client.isFighting()) { // Bloc logique : stoppe immédiatement le flux hors combat pour préserver les animations d'exploration.
             return;
         }
         send(client, fight.getGTL()); // Effet de bord : transmet la timeline actuelle telle quelle.
@@ -1036,20 +1138,14 @@ public class SocketManager {
     }
 
     public static void GAME_SEND_GTM_PACKET(Player out, Fight fight) {
-        StringBuilder packet = new StringBuilder();
-        packet.append("GTM");
-        for (Fighter f : fight.getFighters(3)) {
-            packet.append("|").append(f.getId()).append(";");
-            if (f.isDead()) {
-                packet.append("1");
-                continue;
-            } else
-                packet.append("0;").append(f.getPdv()).append(";").append(f.getPa()).append(";").append(f.getPm()).append(";");
-            packet.append((f.isHide() ? "-1" : f.getCell().getId())).append(";");//On envoie pas la cell d'un invisible :p
-            packet.append(";");//??
-            packet.append(f.getPdvMax());
+        if (out == null || fight == null) { // Bloc logique : valide les paramètres pour éviter toute chaîne vide inutile.
+            return;
         }
-        send(out, packet.toString());
+        GameClient client = out.getGameClient(); // Bloc logique : identifie la session réseau pour déterminer le contexte.
+        if (client != null && !client.isFighting()) { // Bloc logique : empêche l'envoi de GTM hors combat afin de préserver les animations de marche.
+            return;
+        }
+        send(out, buildGtmPacket(fight, null)); // Bloc logique : réutilise la construction partagée sans marquage local explicite.
     }
 
     /**
@@ -1068,19 +1164,64 @@ public class SocketManager {
         if (client == null || fight == null) { // Bloc logique : sécurise l'appel pour éviter des paquets vides.
             return;
         }
-        StringBuilder packet = new StringBuilder("GTM"); // Bloc logique : commence par l'identifiant de paquet.
-        for (Fighter f : fight.getFighters(3)) { // Bloc logique : parcourt tous les combattants visibles.
-            packet.append("|").append(f.getId()).append(";"); // Bloc logique : ouvre la section dédiée au combattant.
-            if (f.isDead()) { // Bloc logique : encode l'état de mort pour éviter d'afficher des barres actives.
-                packet.append("1");
-                continue; // Bloc logique : saute le reste car les stats sont inutiles pour un fantôme.
-            }
-            packet.append("0;").append(f.getPdv()).append(";").append(f.getPa()).append(";").append(f.getPm()).append(";"); // Bloc logique : empile PV, PA puis PM.
-            packet.append((f.isHide() ? "-1" : f.getCell().getId())).append(";"); // Bloc logique : masque la cellule si le combattant est invisible.
-            packet.append(";"); // Bloc logique : champ réservé conservé pour compatibilité protocolaire.
-            packet.append(f.getPdvMax()); // Bloc logique : termine par les PV max pour calibrer la jauge.
+        if (!client.isFighting()) { // Bloc logique : protège l'exploration contre les rafraîchissements de barres PA/PM parasites.
+            return;
         }
-        send(client, packet.toString()); // Effet de bord : envoie l'état complet pour que l'UI se rafraîchisse.
+        send(client, buildGtmPacket(fight, null)); // Effet de bord : diffuse les statistiques sans signaler de focus local.
+    }
+
+    /**
+     * Variante qui marque explicitement un combattant comme focus local dans le paquet GTM.
+     * <p>
+     * Exemple : {@code GAME_SEND_GTM_PACKET(client, fight, heroFighter)} affiche la jauge du héros comme contrôlée localement.<br>
+     * Cas d'erreur : passer un combattant ne participant pas au combat entraîne simplement un paquet sans drapeau local.<br>
+     * Invariant : le contenu reste compatible avec {@link Fight#getFighters(int)} ; seul le segment ciblé gagne un « ;1 » final.
+     * </p>
+     *
+     * @param client      session réseau destinataire.
+     * @param fight       combat concerné.
+     * @param localFocus  combattant à marquer localement ; peut être {@code null} si aucun focus n'est souhaité.
+     */
+    public static void GAME_SEND_GTM_PACKET(GameClient client, Fight fight, Fighter localFocus) {
+        if (client == null || fight == null) { // Bloc logique : vérifie les paramètres essentiels.
+            return;
+        }
+        if (!client.isFighting()) { // Bloc logique : ignore l'envoi si la session n'est plus en combat actif.
+            return;
+        }
+        send(client, buildGtmPacket(fight, localFocus)); // Effet de bord : transmet un GTM éventuellement annoté avec le focus local.
+    }
+
+    /**
+     * Assemble un paquet GTM complet en optionnant un drapeau local sur un combattant spécifique.
+     * <p>
+     * Exemple : {@code buildGtmPacket(fight, fighter)} ajoute {@code ;1} après les PV max du combattant ciblé.<br>
+     * Cas d'erreur fréquent : oublier de tester {@link Fighter#isDead()} avant de marquer local ; la méthode ne lève pas d'exception mais ne marque pas les combattants morts.<br>
+     * Effet de bord : aucun, le combat n'est jamais modifié par cette construction.
+     * </p>
+     *
+     * @param fight      combat source des informations.
+     * @param localFocus combattant à marquer, {@code null} pour ne rien signaler.
+     * @return chaîne GTM prête à l'envoi.
+     */
+    private static String buildGtmPacket(Fight fight, Fighter localFocus) {
+        StringBuilder packet = new StringBuilder("GTM"); // Bloc logique : initialise le préfixe officiel du paquet.
+        int localId = localFocus != null ? localFocus.getId() : -1; // Bloc logique : mémorise l'identifiant ciblé pour accélérer la comparaison.
+        for (Fighter f : fight.getFighters(3)) { // Bloc logique : parcourt tous les combattants visibles par le client.
+            packet.append("|").append(f.getId()).append(";"); // Bloc logique : débute un nouveau segment pour chaque combattant.
+            if (f.isDead()) { // Bloc logique : encode l'état mort pour éviter l'affichage des barres actives.
+                packet.append("1");
+                continue; // Bloc logique : aucun autre champ n'est nécessaire pour un combattant mort.
+            }
+            packet.append("0;").append(f.getPdv()).append(";").append(f.getPa()).append(";").append(f.getPm()).append(";"); // Bloc logique : injecte PV, PA et PM.
+            packet.append((f.isHide() ? "-1" : f.getCell().getId())).append(";"); // Bloc logique : masque la cellule pour les invisibles.
+            packet.append(";"); // Bloc logique : conserve le champ réservé du protocole.
+            packet.append(f.getPdvMax()); // Bloc logique : termine avec les PV max pour calibrer la jauge.
+            if (f.getId() == localId) { // Bloc logique : ajoute le drapeau local uniquement pour le combattant ciblé.
+                packet.append(";1");
+            }
+        }
+        return packet.toString(); // Bloc logique : renvoie la chaîne complète prête à être envoyée.
     }
 
     public static void GAME_SEND_GAMETURNSTART_PACKET_TO_FIGHT(Fight fight,
@@ -1120,6 +1261,9 @@ public class SocketManager {
      */
     public static void GAME_SEND_GAMETURNSTART_PACKET(GameClient client, int guid, int time, int turns) {
         if (client == null) { // Bloc logique : abandonne si le socket est déjà fermé.
+            return;
+        }
+        if (!client.isFighting()) { // Bloc logique : ignore l'annonce de tour lorsque le joueur n'est plus dans la timeline combat.
             return;
         }
         send(client, "GTS" + guid + "|" + time + "|" + turns); // Effet de bord : transmet la commande de démarrage de tour.
@@ -1174,6 +1318,9 @@ public class SocketManager {
         if (client == null) { // Bloc logique : protège contre les paquets envoyés juste après une déconnexion.
             return;
         }
+        if (!client.isFighting()) { // Bloc logique : évite d'activer une timeline combat quand le joueur explore une carte.
+            return;
+        }
         send(client, "GAS" + fighterId); // Bloc logique : Gère la sélection d'un combattant côté client sans passer par le filtre "héros".
     }
 
@@ -1191,6 +1338,9 @@ public class SocketManager {
      */
     public static void GAME_SEND_GAS_PACKET(GameClient client, int fighterId) {
         if (client == null) { // Bloc logique : sécurise contre les sessions déjà fermées.
+            return;
+        }
+        if (!client.isFighting()) { // Bloc logique : ne force pas la sélection d'un combattant hors combat.
             return;
         }
         send(client, "GAS" + fighterId); // Effet de bord : déclenche l'affichage du bouton d'action pour le combattant ciblé.
@@ -1309,6 +1459,27 @@ public class SocketManager {
             send(f.getPersonnage(), packet);
         }
 
+    }
+
+    /**
+     * Envoie un paquet GTR ciblé pour recentrer immédiatement la caméra sur un combattant local.
+     * <p>
+     * Exemple : {@code GAME_SEND_GTR_PACKET(client, fighterId)} juste après un switch d'incarnation héros.<br>
+     * Cas d'erreur : oublier de vérifier {@link GameClient#isFighting()} réactiverait la caméra combat hors contexte ; la méthode gère ce filtre automatiquement.<br>
+     * Effet de bord : repositionne la caméra sans modifier l'état du combat serveur.
+     * </p>
+     *
+     * @param client session réseau ciblée ; doit être connectée et en combat.
+     * @param guid   identifiant du combattant sur lequel la caméra doit se recentrer.
+     */
+    public static void GAME_SEND_GTR_PACKET(GameClient client, int guid) {
+        if (client == null) { // Bloc logique : aucune caméra à déplacer sans session.
+            return;
+        }
+        if (!client.isFighting()) { // Bloc logique : évite d'envoyer le paquet durant l'exploration.
+            return;
+        }
+        send(client, "GTR" + guid); // Effet de bord : force le recentrage caméra sur le combattant spécifié.
     }
 
     public static void GAME_SEND_EMOTICONE_TO_MAP(GameMap map, int guid, int id) {
