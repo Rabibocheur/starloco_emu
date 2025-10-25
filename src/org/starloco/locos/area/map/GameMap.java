@@ -39,6 +39,7 @@ import java.awt.*;
 import java.util.*;
 import java.util.List;
 import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicInteger; // Compteur thread-safe pour les identifiants d'action
 import java.util.stream.Collectors;
 
 public class GameMap {
@@ -111,6 +112,7 @@ public class GameMap {
     private Map<Integer, Npc> npcs = new HashMap<>();
     private Map<Integer, ArrayList<Action>> endFightAction = new HashMap<>();
     private Map<Integer, Integer> mobExtras = new HashMap<>();
+    private final AtomicInteger actionSequence = new AtomicInteger(0); // Garantit un identifiant GA unique par carte
 
     public GameMap(short id, String date, byte w, byte h, String key, String places, String dData, String monsters, String mapPos, byte maxGroup, byte fixSize, byte minSize, byte maxSize, String forbidden, byte sniffed) {
         this.id = id;
@@ -463,6 +465,19 @@ public class GameMap {
 
             this.mobPossibles.add(World.world.getMonstre(id1).getGradeByLevel(lvl));
         }
+    }
+
+    /**
+     * Fournit un identifiant d'action unique côté carte pour synchroniser les animations.<br>
+     * Exemple d'utilisation : {@code int actionId = map.generateNextActionId();}
+     * renvoie un identifiant prêt à être transmis dans {@code GAME_SEND_GA_PACKET_TO_MAP}.<br>
+     * Cas d'erreur fréquent : ne pas réutiliser le même identifiant pour deux actions simultanées.
+     *
+     * @return Identifiant croissant strictement positif (revient à 1 après {@link Integer#MAX_VALUE}).
+     */
+    public int generateNextActionId() {
+        final int nextValue = actionSequence.updateAndGet(current -> current == Integer.MAX_VALUE ? 1 : current + 1); // Évite les débordements tout en recyclant proprement
+        return nextValue; // Renvoie systématiquement un identifiant exploitable par les clients
     }
 
     public byte getMaxSize() {
@@ -1749,4 +1764,11 @@ public class GameMap {
     public void send(String packet) {
         this.getPlayers().stream().filter(player -> player != null).forEach(player -> player.send(packet));
     }
+
+    /** Notes pédagogiques */
+    /*
+     * - L'identifiant GA de carte reste strictement croissant pour éviter les collisions entre joueurs.
+     * - La méthode {@link #generateNextActionId()} encapsule le compteur et évite d'exposer l'AtomicInteger.
+     * - En cas de débordement, l'identifiant repart à 1 afin de conserver une plage positive compréhensible.
+     */
 }
