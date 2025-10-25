@@ -427,12 +427,14 @@ final class HeroFightController {
             return;
         }
         boolean hasFocus = resolvedFighter != null; // Bloc logique : mémorise la présence d'un combattant à marquer localement.
-        if (hasFocus) { // Bloc logique : informe le client de l'entité qu'il doit piloter.
+        if (hasFocus) { // Bloc logique : garantit que la session connaît l'identifiant du combattant contrôlé.
+            synchronizeLocalControl(client, resolvedFighter); // Effet de bord : force le GameClient à pointer sur le bon fighter pour router GA/GAS.
             SocketManager.GAME_SEND_GIC_PACKET(client, resolvedFighter, true); // Effet de bord : marque explicitement le combattant comme local.
-            SocketManager.GAME_SEND_GTR_PACKET(client, resolvedFighter.getId()); // Effet de bord : recadre la caméra sur la bonne entité.
+            SocketManager.GAME_SEND_GTM_PACKET(client, fight, resolvedFighter); // Bloc logique : synchronise immédiatement les jauges PA/PM sur le héros actif.
+        } else { // Bloc logique : conserve la compatibilité même sans focus explicite (spectateur, désynchronisation).
+            SocketManager.GAME_SEND_GTM_PACKET(client, fight); // Effet de bord : diffuse les jauges sans drapeau local.
         }
         SocketManager.GAME_SEND_GTL_PACKET(client, fight); // Bloc logique : rafraîchit la timeline complète.
-        SocketManager.GAME_SEND_GTM_PACKET(client, fight, resolvedFighter); // Bloc logique : synchronise les barres PV/PA/PM en marquant le focus local si nécessaire.
         SocketManager.GAME_SEND_MINI_ASK_PACKET(client, target, resolvedFighter); // Bloc logique : valide l'incarnation côté client sans recharger la carte.
         SocketManager.GAME_SEND_STATS_PACKET(client, target); // Bloc logique : actualise PV/PA/PM visibles.
         SocketManager.GAME_SEND_SPELL_LIST(client, target); // Bloc logique : met à jour la barre de sorts.
@@ -441,6 +443,7 @@ final class HeroFightController {
             int elapsed = fight.getElapsedFightTime(); // Bloc logique : calcule le temps écoulé pour synchroniser le timer.
             int turnCount = fight.getTurnsCount(); // Bloc logique : transmet le numéro de tour courant.
             SocketManager.GAME_SEND_GAMETURNSTART_PACKET(client, resolvedFighter.getId(), elapsed, turnCount); // Effet de bord : déclenche le chronomètre côté client.
+            SocketManager.GAME_SEND_GTR_PACKET(client, resolvedFighter.getId()); // Effet de bord : recadre la caméra sur la bonne entité juste après la synchronisation des PA/PM.
             SocketManager.GAME_SEND_Im_PACKET(client, "1201"); // Effet de bord : affiche le message « C'est votre tour ».
         }
         if (Logging.USE_LOG) { // Bloc logique : consigne la séquence envoyée pour diagnostic.
@@ -448,6 +451,30 @@ final class HeroFightController {
             int fighterId = hasFocus ? resolvedFighter.getId() : -1; // Bloc logique : fournit un identifiant clair même en absence de combattant.
             Logging.getInstance().write(HERO_LOG_CONTEXT, "[HANDSHAKE] Combat session=" + accountId + " cible=" + target.getId() + " fighter=" + fighterId); // Effet de bord : laisse une trace complète pour les QA.
         }
+    }
+
+    /**
+     * Harmonise l'identifiant du combattant contrôlé côté session avec le focus en cours.
+     * <p>
+     * Exemple : {@code synchronizeLocalControl(client, fighter)} juste avant l'envoi de GTM garantit que
+     * {@link GameClient#getControlledFighterId()} renvoie le même identifiant que le combattant marqué localement.<br>
+     * Cas d'erreur fréquent : déclencher la séquence de handshake après une reconnexion ; sans cet appel, le client conserverait l'identifiant précédent.<br>
+     * Invariant : n'a aucun effet si la session référence déjà le bon combattant ou si l'un des paramètres est {@code null}.<br>
+     * Effet de bord : met à jour {@link GameClient#setControlledFighterId(int)} pour que toutes les actions GA/GAS/GAF ciblent le héros actif.
+     * </p>
+     *
+     * @param client         session réseau concernée par la bascule.
+     * @param resolvedFighter combattant actuellement ciblé comme focus local.
+     */
+    private void synchronizeLocalControl(GameClient client, Fighter resolvedFighter) {
+        if (client == null || resolvedFighter == null) { // Bloc logique : abandonne si la session ou le combattant manquent.
+            return;
+        }
+        int currentFocus = client.getControlledFighterId(); // Bloc logique : récupère l'identifiant actuellement mémorisé.
+        if (currentFocus == resolvedFighter.getId()) { // Bloc logique : évite une écriture inutile lorsque l'identifiant est déjà correct.
+            return;
+        }
+        client.setControlledFighterId(resolvedFighter.getId()); // Effet de bord : aligne l'identifiant contrôlé sur le combattant héros.
     }
 
     /**
