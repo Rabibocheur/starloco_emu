@@ -933,6 +933,30 @@ public class SocketManager {
         send(client, packet.toString()); // Bloc logique : expédie immédiatement le paquet au joueur ciblé en ignorant le statut de héros.
     }
 
+    /**
+     * Transmet un paquet GIC directement à une session réseau même si l'incarnation courante est un héros.
+     * <p>
+     * Exemple : {@code GAME_SEND_GIC_PACKET(client, fighter)} juste après un switch d'incarnation en combat.<br>
+     * Cas d'erreur fréquent : appeler avec un combattant sans cellule, l'UI refusera alors de s'actualiser.<br>
+     * Invariant : aucun paquet n'est envoyé si {@code client} est {@code null} ou si {@code fighter} ne référence plus de cellule.<br>
+     * Effet de bord : met à jour la sélection côté client sans toucher aux autres combattants.
+     * </p>
+     *
+     * @param client  session réseau du maître contrôlant le héros.
+     * @param fighter combattant désormais actif.
+     */
+    public static void GAME_SEND_GIC_PACKET(GameClient client, Fighter fighter) {
+        if (client == null || fighter == null) { // Bloc logique : coupe l'envoi si la session ou le combattant est manquant.
+            return;
+        }
+        if (fighter.getCell() == null) { // Bloc logique : évite un paquet invalide lorsque la cellule n'est pas définie.
+            return;
+        }
+        StringBuilder packet = new StringBuilder("GIC|"); // Bloc logique : construit le message dans le format officiel.
+        packet.append(fighter.getId()).append(";").append(fighter.getCell().getId()).append(";1|"); // Bloc logique : insère identifiant, cellule et indicateur de sélection.
+        send(client, packet.toString()); // Effet de bord : notifie immédiatement le client de la nouvelle incarnation.
+    }
+
     public static void GAME_SEND_GS_PACKET_TO_FIGHT(Fight fight, int teams) {
         String packet = "GS";
         for (Fighter f : fight.getFighters(teams)) {
@@ -966,6 +990,25 @@ public class SocketManager {
         String packet = fight.getGTL();
         send(out, packet);
 
+    }
+
+    /**
+     * Envoie un paquet GTL ciblant explicitement une session, contournant le filtre héros.
+     * <p>
+     * Exemple : {@code GAME_SEND_GTL_PACKET(client, fight)} pour rafraîchir l'ordre de jeu après un switch de héros.<br>
+     * Cas d'erreur : fournir un combat {@code null} conduit à un retour silencieux afin d'éviter un {@link NullPointerException}.<br>
+     * Invariant : la timeline transmise correspond toujours à {@link Fight#getGTL()} sans transformation supplémentaire.<br>
+     * Effet de bord : aucune mutation du combat, seul le client reçoit l'information de séquence.
+     * </p>
+     *
+     * @param client session réseau destinataire.
+     * @param fight  combat dont la timeline doit être diffusée.
+     */
+    public static void GAME_SEND_GTL_PACKET(GameClient client, Fight fight) {
+        if (client == null || fight == null) { // Bloc logique : valide les paramètres pour sécuriser l'appel côté débutant.
+            return;
+        }
+        send(client, fight.getGTL()); // Effet de bord : transmet la timeline actuelle telle quelle.
     }
 
     public static void GAME_SEND_GTM_PACKET_TO_FIGHT(Fight fight, int teams) {
@@ -1009,6 +1052,37 @@ public class SocketManager {
         send(out, packet.toString());
     }
 
+    /**
+     * Diffuse un paquet GTM complet vers une session sans vérifier le statut héros du personnage incarné.
+     * <p>
+     * Exemple : {@code GAME_SEND_GTM_PACKET(client, fight)} immédiatement après {@link #GAME_SEND_GTL_PACKET(GameClient, Fight)}.<br>
+     * Cas d'erreur fréquent : oublier de tester {@code fight.getFighterByPerso(hero)} avant d'appeler, ce qui conduirait à un GTM sans le héros.<br>
+     * Invariant : chaque combattant listé conserve ses PV/PA/PM et sa cellule telle que renvoyée par le moteur de combat.<br>
+     * Effet de bord : aucun, la méthode n'altère pas les états du combat.
+     * </p>
+     *
+     * @param client session qui doit reconstruire ses barres PA/PM/PV.
+     * @param fight  combat source des statistiques envoyées.
+     */
+    public static void GAME_SEND_GTM_PACKET(GameClient client, Fight fight) {
+        if (client == null || fight == null) { // Bloc logique : sécurise l'appel pour éviter des paquets vides.
+            return;
+        }
+        StringBuilder packet = new StringBuilder("GTM"); // Bloc logique : commence par l'identifiant de paquet.
+        for (Fighter f : fight.getFighters(3)) { // Bloc logique : parcourt tous les combattants visibles.
+            packet.append("|").append(f.getId()).append(";"); // Bloc logique : ouvre la section dédiée au combattant.
+            if (f.isDead()) { // Bloc logique : encode l'état de mort pour éviter d'afficher des barres actives.
+                packet.append("1");
+                continue; // Bloc logique : saute le reste car les stats sont inutiles pour un fantôme.
+            }
+            packet.append("0;").append(f.getPdv()).append(";").append(f.getPa()).append(";").append(f.getPm()).append(";"); // Bloc logique : empile PV, PA puis PM.
+            packet.append((f.isHide() ? "-1" : f.getCell().getId())).append(";"); // Bloc logique : masque la cellule si le combattant est invisible.
+            packet.append(";"); // Bloc logique : champ réservé conservé pour compatibilité protocolaire.
+            packet.append(f.getPdvMax()); // Bloc logique : termine par les PV max pour calibrer la jauge.
+        }
+        send(client, packet.toString()); // Effet de bord : envoie l'état complet pour que l'UI se rafraîchisse.
+    }
+
     public static void GAME_SEND_GAMETURNSTART_PACKET_TO_FIGHT(Fight fight,
                                                                int teams, int guid, int time, int turns) {
         String packet = "GTS" + guid + "|" + time + "|" + turns; // By Coding Mestre -> Displays turns at the end of fight
@@ -1028,6 +1102,27 @@ public class SocketManager {
         String packet = "GTS" + guid + "|" + time + "|" + turns;
         send(P, packet);
 
+    }
+
+    /**
+     * Variante orientée session du paquet GTS pour annoncer le début de tour sans filtrage héros.
+     * <p>
+     * Exemple : {@code GAME_SEND_GAMETURNSTART_PACKET(client, fighterId, elapsed, turn)} dans la séquence de switch d'un héros.<br>
+     * Cas d'erreur fréquent : envoyer un identifiant négatif, le client refusera alors de démarrer le chronomètre.<br>
+     * Invariant : le paquet respecte toujours le format {@code GTS<id>|<time>|<turn>} attendu par le client 1.29.<br>
+     * Effet de bord : démarre/rafraîchit le timer côté client sans modifier le combat serveur.
+     * </p>
+     *
+     * @param client session réseau concernée.
+     * @param guid   identifiant du combattant actif.
+     * @param time   temps écoulé depuis le début du combat (ms).
+     * @param turns  numéro du tour courant.
+     */
+    public static void GAME_SEND_GAMETURNSTART_PACKET(GameClient client, int guid, int time, int turns) {
+        if (client == null) { // Bloc logique : abandonne si le socket est déjà fermé.
+            return;
+        }
+        send(client, "GTS" + guid + "|" + time + "|" + turns); // Effet de bord : transmet la commande de démarrage de tour.
     }
 
     public static void GAME_SEND_GV_PACKET(Player P) {
@@ -1080,6 +1175,25 @@ public class SocketManager {
             return;
         }
         send(client, "GAS" + fighterId); // Bloc logique : Gère la sélection d'un combattant côté client sans passer par le filtre "héros".
+    }
+
+    /**
+     * Envoie un paquet GAS à une session spécifique, utilisé lors d'un switch d'incarnation héros.
+     * <p>
+     * Exemple : {@code GAME_SEND_GAS_PACKET(client, fighterId)} juste après {@link #GAME_SEND_GIC_PACKET(GameClient, Fighter)}.<br>
+     * Cas d'erreur : transmettre un identifiant de combattant absent laisse l'UI sans focus ; la méthode n'effectue pas de vérification supplémentaire.<br>
+     * Invariant : aucun envoi si {@code client} est {@code null}, évitant une exception réseau.<br>
+     * Effet de bord : informe immédiatement le client de l'entité contrôlable.
+     * </p>
+     *
+     * @param client    session réseau destinataire.
+     * @param fighterId identifiant du combattant sélectionné.
+     */
+    public static void GAME_SEND_GAS_PACKET(GameClient client, int fighterId) {
+        if (client == null) { // Bloc logique : sécurise contre les sessions déjà fermées.
+            return;
+        }
+        send(client, "GAS" + fighterId); // Effet de bord : déclenche l'affichage du bouton d'action pour le combattant ciblé.
     }
 
     public static void GAME_SEND_GA_PACKET_TO_FIGHT(Fight fight, int teams,
