@@ -276,6 +276,23 @@ public final class HeroManager {
     }
 
     /**
+     * Déploie un mode de contrôle de secours lorsqu'un héros n'a pas pu être incarné par la méthode standard.
+     * <p>
+     * Exemple : {@code prepareFallbackTurnControl(fight, fighter)} est appelé juste après un échec de {@link #prepareTurnControl(Fight, Fighter)}<br>
+     * afin de conserver le tour actif sans imposer un passage automatique.<br>
+     * Invariant : n'a d'effet que si le combattant est réellement un héros contrôlable ; les autres entités ne sont pas modifiées.<br>
+     * Effet de bord : configure {@link GameClient#setControlledFighterId(int)} et réexpédie les paquets GIC/GAS nécessaires pour guider le client.<br>
+     * </p>
+     *
+     * @param fight   combat dans lequel le héros joue actuellement.
+     * @param fighter combattant ciblé par la tentative de récupération.
+     * @return {@code true} si le fallback a bien établi un canal de contrôle manuel, {@code false} sinon.
+     */
+    public synchronized boolean prepareFallbackTurnControl(Fight fight, Fighter fighter) {
+        return fightController.prepareFallbackTurnControl(fight, fighter); // Délègue la bascule de secours au contrôleur dédié.
+    }
+
+    /**
      * Termine la session de contrôle d'un héros à la fin de son tour.
      * <p>
      * Exemple : {@code finalizeTurnControl(fighter)} renvoie instantanément le contrôle sur le maître propriétaire.<br>
@@ -770,6 +787,7 @@ public final class HeroManager {
      * - {@link HeroFightController#finalizeTurnControl(Fighter)} restitue automatiquement l'interface du maître en réinitialisant {@link GameClient#resetControlledFighter()}.
      * - {@link HeroFightController#resolveControlledActor(Player)} reste un filet de sécurité lorsque l'identifiant de combattant contrôlé n'est plus disponible.
      * - {@link HeroFightController#releaseControlFor(Player, Player)} centralise la remise à zéro des paquets et du suivi de contrôle côté session.
+     * - {@link HeroFightController#prepareFallbackTurnControl(Fight, Fighter)} garantit un relais minimal si le switch complet échoue.
      * - Les instantanés ({@link HeroSnapshot}) restent indispensables pour restaurer proprement les positions hors combat.
      */
 }

@@ -1647,7 +1647,11 @@ public class Fight {
       current.setCanPlay(true);
       this.turn=new Turn(this,current);
       HeroManager heroManager = HeroManager.getInstance(); // Centralise la logique de prise de contrôle manuel des héros.
-      if (!heroManager.prepareTurnControl(this, current)) { // Bloc logique : le maître est indisponible, on programme un passage automatique.
+      boolean heroControlReady = heroManager.prepareTurnControl(this, current); // Bloc logique : tente la préparation standard (switch complet) du contrôle héros.
+      if (!heroControlReady) { // Bloc logique : la préparation standard a échoué, probablement faute d'un switch complet côté client.
+          heroControlReady = heroManager.prepareFallbackTurnControl(this, current); // Bloc logique : tente une bascule de secours avant de forcer le passage de tour.
+      }
+      if (!heroControlReady) { // Bloc logique : même la solution de secours a échoué, il faut donc préserver l'intégrité du combat.
           TimerWaiter.addNext(() -> this.endTurn(false, current), 200, TimeUnit.MILLISECONDS, TimerWaiter.DataType.FIGHT); // Laisse un court délai pour la mise à jour côté client avant de passer le tour.
           return;
       }
@@ -6094,6 +6098,7 @@ public class Fight {
     /** Notes pédagogiques
      * - {@link #registerHeroesForMaster(Player, int, Fighter)} insère les héros dès la phase de placement pour garantir leur visibilité.
      * - Le début de tour coopère avec {@link HeroManager#prepareTurnControl(Fight, Fighter)} afin de déléguer le pilotage des héros au maître connecté.
+     * - {@link HeroManager#prepareFallbackTurnControl(Fight, Fighter)} assure une bascule minimale quand le switch complet échoue.
      * - {@link HeroManager#finalizeTurnControl(Fighter)} est invoqué via {@link #endTurn(boolean)} pour restituer l'interface au maître en fin de tour.
      * - {@link #resyncHeroesAfterFight(Collection)} replace les héros en mode virtuel à la fin d'un combat.
      */

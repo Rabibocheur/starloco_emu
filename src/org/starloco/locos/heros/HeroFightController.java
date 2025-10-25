@@ -196,6 +196,48 @@ final class HeroFightController {
     }
 
     /**
+     * Met en place une redirection minimale quand le switch complet de contrôle a échoué.
+     * <p>
+     * Exemple : {@code prepareFallbackTurnControl(fight, fighter)} est invoqué après un retour {@code false} de {@link #prepareTurnControl(Fight, Fighter)}<br>
+     * pour conserver la main sur le tour en cours sans forcer un passage automatique.<br>
+     * Invariant : si le combattant n'est pas un héros ou s'il est déjà mort, la méthode n'altère pas l'état courant.<br>
+     * Effet de bord : définit {@link GameClient#setControlledFighterId(int)} et réutilise {@link #sendIncarnationHandshake(GameClient, Player, Fighter)} pour rafraîchir le client maître.<br>
+     * </p>
+     *
+     * @param fight   combat hôte dans lequel le héros doit agir.
+     * @param fighter combattant potentiellement privé de contrôle.
+     * @return {@code true} si la redirection minimale a été installée, {@code false} si aucun contrôle fiable n'est possible.
+     */
+    boolean prepareFallbackTurnControl(Fight fight, Fighter fighter) {
+        if (fighter == null) { // Bloc logique : sans combattant, aucun fallback n'est nécessaire.
+            return true;
+        }
+        Player actor = fighter.getPersonnage();
+        if (actor == null || !heroManager.isHero(actor)) { // Bloc logique : ne traite que les héros virtuels.
+            return true;
+        }
+        if (fighter.isDead()) { // Bloc logique : ne tente rien si le héros est déjà éliminé.
+            return false;
+        }
+        Player master = heroManager.findMaster(actor); // Bloc logique : récupère le maître pour router les paquets de secours.
+        if (master == null) { // Bloc logique : impossible de piloter le héros sans maître associé.
+            return false;
+        }
+        GameClient client = master.getGameClient();
+        if (client == null || master.getFight() != fight) { // Bloc logique : exige une session active dans le même combat.
+            return false;
+        }
+        client.setControlledFighterId(fighter.getId()); // Bloc logique : indique explicitement quel combattant reçoit les GA.
+        activeHeroControl.put(master.getId(), actor); // Bloc logique : mémorise le lien pour {@link #resolveControlledActor(Player)}.
+        sendIncarnationHandshake(client, actor, fighter); // Bloc logique : renvoie les paquets combat pour synchroniser l'UI.
+        if (Logging.USE_LOG) { // Bloc logique : trace la mise en place du fallback pour audit QA.
+            Logging.getInstance().write(HERO_LOG_CONTEXT, "[TURN] Fallback contrôle hero=" + actor.getId()
+                    + " fighter=" + fighter.getId());
+        }
+        return true;
+    }
+
+    /**
      * Termine la session de contrôle d'un héros à la fin de son tour.
      * <p>
      * Exemple : invoqué depuis {@code Fight#endTurn} pour rendre la main au maître.<br>
@@ -524,6 +566,7 @@ final class HeroFightController {
      * - {@link #prepareTurnControl(Fight, Fighter)} renvoie {@code false} pour inviter le moteur à passer le tour si le maître est indisponible.
      * - {@link #finalizeTurnControl(Fighter)} délègue à {@link #releaseControlFor(Player, Player)} la restauration complète de l'UI.
      * - {@link #resolveControlledActor(Player)} permet aux couches réseau de router les commandes sur le bon combattant.
+     * - {@link #prepareFallbackTurnControl(Fight, Fighter)} sécurise la continuité du tour quand l'incarnation complète échoue.
      * - {@link #transferManualControl(Player, Player)} maintient le même héros actif après un {@code switchMaster}.
      * - {@link #engageTemporaryIncarnation(Player, Player)} force le client à incarner un héros pendant son tour.
      * - {@link #restorePrimaryIncarnation(Player)} garantit le retour automatique sur le maître en fin de tour ou lors d'un nettoyage.
