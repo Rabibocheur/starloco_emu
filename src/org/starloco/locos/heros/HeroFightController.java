@@ -281,6 +281,7 @@ final class HeroFightController {
                 SocketManager.GAME_SEND_GTL_PACKET(master, fight); // Bloc logique : rafraîchit la timeline PA/PM.
                 GameClient masterClient = master.getGameClient(); // Bloc logique : sécurise l'accès à la session pour le GTM ciblé.
                 if (masterClient != null) { // Bloc logique : envoie le GTM uniquement si le socket maître est disponible.
+                    notifyLocalControlSwitch(masterClient, masterFighter); // Effet de bord : replace idPersoActif sur le maître restauré.
                     SocketManager.GAME_SEND_GTM_PACKET(masterClient, fight, masterFighter); // Bloc logique : synchronise PV et positions en marquant le maître local.
                     SocketManager.GAME_SEND_GTR_PACKET(masterClient, masterFighter.getId()); // Bloc logique : assure le recentrage caméra sur le maître.
                     SocketManager.GAME_SEND_Im_PACKET(masterClient, "1201"); // Bloc logique : répète le feedback « C'est votre tour » lors du retour sur le maître.
@@ -429,6 +430,7 @@ final class HeroFightController {
         boolean hasFocus = resolvedFighter != null; // Bloc logique : mémorise la présence d'un combattant à marquer localement.
         if (hasFocus) { // Bloc logique : garantit que la session connaît l'identifiant du combattant contrôlé.
             synchronizeLocalControl(client, resolvedFighter); // Effet de bord : force le GameClient à pointer sur le bon fighter pour router GA/GAS.
+            notifyLocalControlSwitch(client, resolvedFighter); // Effet de bord : avertit le client que les entrées doivent cibler ce combattant.
             SocketManager.GAME_SEND_GIC_PACKET(client, resolvedFighter, true); // Effet de bord : marque explicitement le combattant comme local.
             SocketManager.GAME_SEND_GTM_PACKET(client, fight, resolvedFighter); // Bloc logique : synchronise immédiatement les jauges PA/PM sur le héros actif.
         } else { // Bloc logique : conserve la compatibilité même sans focus explicite (spectateur, désynchronisation).
@@ -478,6 +480,26 @@ final class HeroFightController {
     }
 
     /**
+     * Prévient explicitement le client que l'acteur contrôlé vient de changer afin de transférer le focus des entrées.
+     * <p>
+     * Exemple : {@code notifyLocalControlSwitch(client, fighter)} juste après {@link #synchronizeLocalControl(GameClient, Fighter)}.<br>
+     * Cas d'erreur fréquent : négliger cet appel maintient le focus sur le maître, rendant le héros inerte côté joueur.<br>
+     * Effet de bord : expédie la paire de paquets GS/BP attendue par le client pour mettre à jour « idPersoActif » et le curseur combat.<br>
+     * Invariant : sans session ou combattant valide, aucun paquet n'est envoyé pour éviter une désynchronisation supplémentaire.
+     * </p>
+     *
+     * @param client  session réseau qui doit rediriger ses entrées.
+     * @param fighter combattant désormais contrôlé par le joueur.
+     */
+    private void notifyLocalControlSwitch(GameClient client, Fighter fighter) {
+        if (client == null || fighter == null) { // Bloc logique : impossible de signaler un focus sans session ni combattant.
+            return;
+        }
+        SocketManager.GAME_SEND_GS_PACKET(client); // Effet de bord : réactive le mécanisme interne qui relit l'incarnation locale.
+        SocketManager.GAME_SEND_BP_PACKET(client, fighter.getId()); // Effet de bord : définit l'identifiant du combattant contrôlé côté client.
+    }
+
+    /**
      * Expédie la séquence d'incarnation standard utilisée hors combat.
      * <p>
      * Exemple : {@code sendMapPackets(client, master)} après la fin d'un combat pour restaurer l'affichage habituel.<br>
@@ -507,6 +529,7 @@ final class HeroFightController {
      * - {@link #restorePrimaryIncarnation(Player)} garantit le retour automatique sur le maître en fin de tour ou lors d'un nettoyage.
      * - {@link #clearManualControl(Player)} reste utile pour purger tout résidu lors de l'ajout ou du retrait d'un héros.
      * - {@link #sendCombatPackets(GameClient, Player, Fight, Fighter)} orchestre GIC/GTL/GTM/GAS/GTS + GTR/Im1201 pour le combattant local.
+     * - {@link #notifyLocalControlSwitch(GameClient, Fighter)} diffuse GS/BP afin de transférer les clics sur le héros ciblé.
      * - {@link #sendMapPackets(GameClient, Player)} renvoie la séquence ASK/Stats/Spells/Ow classique hors combat.
      */
 }

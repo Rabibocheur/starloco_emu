@@ -1068,6 +1068,49 @@ public class SocketManager {
 
     }
 
+    /**
+     * Variante orientée session du paquet « GS » permettant de signaler un changement d'acteur local.
+     * <p>
+     * Exemple : {@code GAME_SEND_GS_PACKET(client)} juste avant un {@link #GAME_SEND_GTM_PACKET(GameClient, Fight, Fighter)}<br>
+     * Cas d'erreur : appeler cette méthode hors combat est sans effet côté client mais ne provoque pas d'exception.<br>
+     * Effet de bord : informe le moteur Flash que l'incarnation active peut changer sans recharger la carte.<br>
+     * Invariant : si {@code client} est {@code null}, aucun paquet n'est envoyé.
+     * </p>
+     *
+     * @param client session réseau directement ciblée par le basculement d'incarnation.
+     */
+    public static void GAME_SEND_GS_PACKET(GameClient client) {
+        if (client == null) { // Bloc logique : refuse tout envoi sans session valide.
+            return;
+        }
+        send(client, "GS"); // Effet de bord : reproduit le paquet "GS" standard pour déclencher la mise à jour locale.
+    }
+
+    /**
+     * Annonce explicitement l'identifiant du combattant local que le client doit considérer comme acteur principal.
+     * <p>
+     * Exemple : {@code GAME_SEND_BP_PACKET(client, fighterId)} juste après un switch héros déclenche la mise à jour d'idPersoActif.<br>
+     * Cas d'erreur fréquent : transmettre un identifiant négatif ou nul, ce qui laisserait le client sur l'ancien combattant.<br>
+     * Invariant : ignore automatiquement la requête si la session n'est plus en combat pour éviter les doublons hors contexte.<br>
+     * Effet de bord : synchronise l'entrée utilisateur (clics, raccourcis) sur le combattant fourni.
+     * </p>
+     *
+     * @param client          session réseau devant recevoir le focus.
+     * @param activeFighterId identifiant du combattant désormais contrôlé par le joueur.
+     */
+    public static void GAME_SEND_BP_PACKET(GameClient client, int activeFighterId) {
+        if (client == null) { // Bloc logique : sans session, aucun paquet ne doit être envoyé.
+            return;
+        }
+        if (!client.isFighting()) { // Bloc logique : protège le protocole monde en bloquant les annonces hors combat.
+            return;
+        }
+        if (activeFighterId <= 0) { // Bloc logique : filtre les identifiants invalides pour éviter un état incohérent.
+            return;
+        }
+        send(client, "BP" + activeFighterId); // Effet de bord : envoie le paquet minimaliste attendu par le client 1.29.
+    }
+
     public static void GAME_SEND_GTL_PACKET_TO_FIGHT(Fight fight, int teams) {
         for (Fighter f : fight.getFighters(teams)) {
             if (f.hasLeft())
@@ -3175,5 +3218,7 @@ public class SocketManager {
      * - {@link #buildCombatAskPacket(Player, Fighter)} partage désormais le même format que {@link #buildAskPacket(Player)} pour rester compatible 1.29.
      * - {@link #send(GameClient, String)} filtre GDM et GCK lorsque {@link GameClient#isFighting()} vaut {@code true} afin d'éviter un retour lobby.
      * - {@link #GAME_SEND_GAME_CREATE(GameClient, String)} ignore les sessions en combat pour bloquer les paquets GCK parasites.
+     * - {@link #GAME_SEND_GS_PACKET(GameClient)} offre un raccourci pour réinitialiser l'acteur local en cours de combat.
+     * - {@link #GAME_SEND_BP_PACKET(GameClient, int)} positionne explicitement l'identifiant du combattant contrôlé côté client.
      */
 }
